@@ -612,6 +612,65 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_project_activity_proj ON project_activity(projectId, createdAt DESC);
   CREATE INDEX IF NOT EXISTS idx_git_connections_proj ON git_connections(projectId);
   CREATE INDEX IF NOT EXISTS idx_git_commits_proj ON git_commits(projectId, createdAt DESC);
+
+  -- ==========================================
+  -- PHASE 1: Real Multi-Model AI Backend Architecture Tables
+  -- ==========================================
+
+  -- 39. AI Providers Table
+  CREATE TABLE IF NOT EXISTS ai_providers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    isConfigured INTEGER NOT NULL DEFAULT 0,
+    healthStatus TEXT NOT NULL DEFAULT 'NOT_CONFIGURED',
+    lastHealthCheckAt TEXT,
+    latencyMs INTEGER,
+    errorDetails TEXT,
+    updatedAt TEXT NOT NULL
+  );
+
+  -- 40. AI Models Registry Table
+  CREATE TABLE IF NOT EXISTS ai_models (
+    id TEXT PRIMARY KEY,
+    providerId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    modelId TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    isAvailable INTEGER NOT NULL DEFAULT 0,
+    healthStatus TEXT NOT NULL DEFAULT 'NOT_CONFIGURED',
+    latencyMs INTEGER,
+    capabilitiesJson TEXT NOT NULL,
+    lastHealthCheckAt TEXT,
+    errorDetails TEXT,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+
+  -- 41. AI Requests Audit and Observability Table
+  CREATE TABLE IF NOT EXISTS ai_requests (
+    id TEXT PRIMARY KEY,
+    requestId TEXT NOT NULL,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversationId TEXT,
+    modelKey TEXT NOT NULL,
+    providerId TEXT NOT NULL,
+    modelId TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    inputTokens INTEGER NOT NULL DEFAULT 0,
+    outputTokens INTEGER NOT NULL DEFAULT 0,
+    totalTokens INTEGER NOT NULL DEFAULT 0,
+    creditsDeducted INTEGER NOT NULL DEFAULT 0,
+    latencyMs INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL, -- 'COMPLETED', 'FAILED', 'CANCELLED', 'STREAMING'
+    errorCategory TEXT,
+    errorMessage TEXT,
+    createdAt TEXT NOT NULL,
+    completedAt TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_models_provider ON ai_models(providerId);
+  CREATE INDEX IF NOT EXISTS idx_ai_requests_user ON ai_requests(userId, createdAt DESC);
+  CREATE INDEX IF NOT EXISTS idx_ai_requests_req ON ai_requests(requestId);
 `);
 
 // Run column migrations for `users` table safely

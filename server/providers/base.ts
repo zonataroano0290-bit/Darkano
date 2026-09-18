@@ -2,7 +2,8 @@ import {
   ServerModelInfo,
   ChatRequestPayload,
   StreamEventChunk,
-  NonStreamChatResponse
+  NonStreamChatResponse,
+  ModelHealthCheckResult
 } from '../types.js';
 
 export interface ProviderChatOptions extends ChatRequestPayload {
@@ -25,4 +26,7 @@ export abstract class BaseAIProvider {
     options: ProviderChatOptions,
     abortSignal?: AbortSignal
   ): Promise<NonStreamChatResponse>;
+
+  abstract healthCheck(modelId?: string): Promise<ModelHealthCheckResult>;
 }
+

@@ -4,7 +4,9 @@ import {
   ServerModelInfo,
   StreamEventChunk,
   NonStreamChatResponse,
-  UsageMetadata
+  UsageMetadata,
+  ModelHealthCheckResult,
+  ModelHealthStatus
 } from '../types.js';
 
 export class DarkanoProvider extends BaseAIProvider {
@@ -191,9 +193,9 @@ export class DarkanoProvider extends BaseAIProvider {
     }
 
     // Select primary model based on Darkano specification
-    let targetModel = 'gemini-3.5-flash';
+    let targetModel = 'gemini-3-flash-preview';
     if (options.model === 'darkano-flash-v2' && (!options.multimodalParts || options.multimodalParts.length === 0)) {
-      targetModel = 'gemini-3.5-flash-lite';
+      targetModel = 'gemini-3.1-flash-lite';
     }
 
     // If research mode or security research / web search is requested, enable Google Search Grounding
@@ -218,8 +220,8 @@ export class DarkanoProvider extends BaseAIProvider {
       try {
         responseStream = await tryGenerate(targetModel);
       } catch (firstErr: any) {
-        console.warn(`[Darkano] Primary model ${targetModel} issue (${firstErr?.message}), falling back to gemini-3.5-flash-lite...`);
-        responseStream = await tryGenerate('gemini-3.5-flash-lite');
+        console.warn(`[Darkano] Primary model ${targetModel} issue (${firstErr?.message}), falling back to gemini-3.1-flash-lite...`);
+        responseStream = await tryGenerate('gemini-3.1-flash-lite');
       }
 
       let promptTokens = 0;
@@ -336,7 +338,7 @@ export class DarkanoProvider extends BaseAIProvider {
     const contents = this.sanitizeContents(options.history, options.message);
 
     try {
-      const modelToUse = options.model === 'darkano-flash-v2' ? 'gemini-3.5-flash-lite' : 'gemini-3.5-flash';
+      const modelToUse = options.model === 'darkano-flash-v2' ? 'gemini-3.1-flash-lite' : 'gemini-3-flash-preview';
       let response;
       try {
         response = await client.models.generateContent({
@@ -350,7 +352,7 @@ export class DarkanoProvider extends BaseAIProvider {
         });
       } catch {
         response = await client.models.generateContent({
-          model: 'gemini-3.5-flash-lite',
+          model: 'gemini-3.1-flash-lite',
           contents,
           config: {
             systemInstruction: options.resolvedSystemPrompt,
@@ -389,6 +391,53 @@ export class DarkanoProvider extends BaseAIProvider {
         provider: this.name,
         status: 'error',
         errorMessage: err?.message || 'Inference dispatch failed'
+      };
+    }
+  }
+
+  async healthCheck(modelId?: string): Promise<ModelHealthCheckResult> {
+    const targetModel = modelId || 'darkano-ultra-v2';
+    const checkedAt = new Date().toISOString();
+
+    if (!this.isConfigured()) {
+      return {
+        modelKey: targetModel,
+        provider: this.id,
+        modelId: targetModel,
+        status: 'NOT_CONFIGURED',
+        error: 'Darkano engine inference credentials are not configured.',
+        checkedAt
+      };
+    }
+
+    const startTime = Date.now();
+    try {
+      const client = this.getClient();
+      // Test real inference backend access
+      await client.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: 'Ping'
+      });
+
+      const latencyMs = Date.now() - startTime;
+      return {
+        modelKey: targetModel,
+        provider: this.id,
+        modelId: targetModel,
+        status: 'CONNECTED',
+        latencyMs,
+        checkedAt
+      };
+    } catch (err: any) {
+      const latencyMs = Date.now() - startTime;
+      return {
+        modelKey: targetModel,
+        provider: this.id,
+        modelId: targetModel,
+        status: 'PROVIDER_ERROR',
+        latencyMs,
+        error: err?.message || 'Inference engine health check failed',
+        checkedAt
       };
     }
   }

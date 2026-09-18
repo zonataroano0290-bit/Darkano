@@ -4,8 +4,11 @@ import {
   ServerModelInfo,
   StreamEventChunk,
   NonStreamChatResponse,
-  UsageMetadata
+  UsageMetadata,
+  ModelHealthCheckResult,
+  ModelHealthStatus
 } from '../types.js';
+import { getRegisteredModel } from './modelRegistry.js';
 
 export class GeminiProvider extends BaseAIProvider {
   readonly id = 'google';
@@ -15,7 +18,7 @@ export class GeminiProvider extends BaseAIProvider {
 
   private getClient(): GoogleGenAI {
     if (!this.aiClient) {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
       if (!apiKey || apiKey.trim().length === 0) {
         throw new Error('Google Gemini API Key is not configured on the server.');
       }
@@ -32,7 +35,8 @@ export class GeminiProvider extends BaseAIProvider {
   }
 
   isConfigured(): boolean {
-    return Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0);
+    const key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+    return Boolean(key && key.trim().length > 0);
   }
 
   getModels(): ServerModelInfo[] {
@@ -208,9 +212,9 @@ export class GeminiProvider extends BaseAIProvider {
   ): AsyncGenerator<StreamEventChunk, void, unknown> {
     const startTime = Date.now();
     const client = this.getClient();
-    let targetModel = 'gemini-3.5-flash';
+    let targetModel = 'gemini-3-flash-preview';
     if (options.model === 'gemini-3.1-flash-lite' && (!options.multimodalParts || options.multimodalParts.length === 0)) {
-      targetModel = 'gemini-3.5-flash-lite';
+      targetModel = 'gemini-3.1-flash-lite';
     }
     const contents = this.sanitizeContents(options.history, options.message, options.multimodalParts);
 
@@ -236,8 +240,8 @@ export class GeminiProvider extends BaseAIProvider {
       try {
         responseStream = await tryGenerate(targetModel);
       } catch (firstErr: any) {
-        console.warn(`[Gemini] Primary model ${targetModel} issue, falling back to gemini-3.5-flash-lite...`);
-        responseStream = await tryGenerate('gemini-3.5-flash-lite');
+        console.warn(`[Gemini] Primary model ${targetModel} issue, falling back to gemini-3.1-flash-lite...`);
+        responseStream = await tryGenerate('gemini-3.1-flash-lite');
       }
 
       let accumulatedText = '';
@@ -355,7 +359,7 @@ export class GeminiProvider extends BaseAIProvider {
   ): Promise<NonStreamChatResponse> {
     const startTime = Date.now();
     const client = this.getClient();
-    const targetModel = options.model === 'gemini-2.5-pro' ? 'gemini-3.5-flash' : 'gemini-3.5-flash-lite';
+    const targetModel = options.model === 'gemini-3.1-flash-lite' ? 'gemini-3.1-flash-lite' : 'gemini-3-flash-preview';
     const contents = this.sanitizeContents(options.history, options.message);
 
     try {
@@ -372,7 +376,7 @@ export class GeminiProvider extends BaseAIProvider {
         });
       } catch {
         response = await client.models.generateContent({
-          model: 'gemini-3.5-flash-lite',
+          model: 'gemini-3.1-flash-lite',
           contents,
           config: {
             systemInstruction: options.resolvedSystemPrompt,
@@ -413,5 +417,73 @@ export class GeminiProvider extends BaseAIProvider {
         errorMessage: err?.message || 'Failed to complete inference request'
       };
     }
+  }
+
+  async healthCheck(modelId?: string): Promise<ModelHealthCheckResult> {
+    const regEntry = getRegisteredModel(modelId || 'gemini-3-flash-preview');
+    const targetModel = regEntry?.modelId || process.env.GOOGLE_MODEL || process.env.GEMINI_MODEL || modelId || 'gemini-3-flash-preview';
+    const checkedAt = new Date().toISOString();
+
+    if (!this.isConfigured()) {
+      return {
+        modelKey: modelId || 'gemini-3-flash-preview',
+        provider: this.id,
+        modelId: targetModel,
+        status: 'NOT_CONFIGURED',
+        error: 'GOOGLE_API_KEY / GEMINI_API_KEY environment variable is not defined.',
+        checkedAt
+      };
+    }
+
+    const startTime = Date.now();
+    try {
+      const client = this.getClient();
+      // Send a minimal real request to verify model access
+      await client.models.generateContent({
+        model: targetModel,
+        contents: 'Ping'
+      });
+
+      const latencyMs = Date.now() - startTime;
+      return {
+        modelKey: modelId || 'gemini-3-flash-preview',
+        provider: this.id,
+        modelId: targetModel,
+        status: 'CONNECTED',
+        latencyMs,
+        checkedAt
+      };
+    } catch (err: any) {
+      const latencyMs = Date.now() - startTime;
+      const { status, message } = this.normalizeError(err);
+      return {
+        modelKey: modelId || 'gemini-3-flash-preview',
+        provider: this.id,
+        modelId: targetModel,
+        status,
+        latencyMs,
+        error: message,
+        checkedAt
+      };
+    }
+  }
+
+  private normalizeError(err: any): { status: ModelHealthStatus; message: string } {
+    const statusNumber = err?.status || err?.statusCode;
+    const msg = err?.message || 'Unknown Google Gemini error';
+
+    if (statusNumber === 401 || statusNumber === 403 || msg.includes('API key not valid') || msg.includes('API_KEY_INVALID')) {
+      return { status: 'INVALID_API_KEY', message: 'Invalid Google Gemini API key provided.' };
+    }
+    if (statusNumber === 404 || msg.includes('models/') || msg.includes('not found')) {
+      return { status: 'MODEL_UNAVAILABLE', message: `Requested Google Gemini model is not accessible: ${msg}` };
+    }
+    if (statusNumber === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
+      return { status: 'RATE_LIMITED', message: `Google Gemini quota or rate limit reached: ${msg}` };
+    }
+    if (err?.code === 'ECONNREFUSED' || err?.code === 'ETIMEDOUT' || err?.code === 'ENOTFOUND') {
+      return { status: 'NETWORK_ERROR', message: `Network connection to Google Gemini failed: ${msg}` };
+    }
+    return { status: 'PROVIDER_ERROR', message: msg };
   }
 }

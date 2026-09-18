@@ -536,5 +536,53 @@ export interface GitStatusResult {
   remoteUrl?: string;
 }
 
+// ==========================================
+// PHASE 1: Real Multi-Model AI Backend Architecture Types
+// ==========================================
+
+export type ModelHealthStatus =
+  | 'CONNECTED'
+  | 'NOT_CONFIGURED'
+  | 'INVALID_API_KEY'
+  | 'MODEL_UNAVAILABLE'
+  | 'RATE_LIMITED'
+  | 'PROVIDER_ERROR'
+  | 'NETWORK_ERROR';
+
+export interface ModelHealthCheckResult {
+  modelKey: string;
+  provider: string;
+  modelId: string;
+  status: ModelHealthStatus;
+  latencyMs?: number;
+  error?: string;
+  checkedAt: string;
+}
+
+export interface ModelRegistryEntry {
+  key: string;
+  name: string;
+  provider: string; // 'google' | 'openai' | 'anthropic' | 'xai' | 'darkano'
+  modelId: string; // The real official upstream model id passed to the SDK
+  enabled: boolean;
+  category: 'flagship' | 'reasoning' | 'fast' | 'coding' | 'open-weights';
+  description: string;
+  contextWindow: string;
+  maxOutputTokens: string;
+  latencyTier: 'Ultra Fast' | 'Fast' | 'Balanced' | 'Deep Think';
+  capabilities: string[];
+  capabilityMatrix: ModelCapabilityMatrix;
+  streamingSupported: boolean;
+  accentColor: string;
+  isFlagship?: boolean;
+}
+
+export interface AutoRouteResult {
+  selectedModel: string;
+  provider: string;
+  reason: string;
+  entry: ModelRegistryEntry;
+}
+
 
 

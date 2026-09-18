@@ -475,7 +475,7 @@ CRITICAL RULES:
       });
 
       const response = await client.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-3-flash-preview',
         contents: planningPrompt,
         config: {
           temperature: 0.1,

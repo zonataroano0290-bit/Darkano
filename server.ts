@@ -47,6 +47,8 @@ import {
   uploadRateLimiter
 } from './server/middleware/rateLimiter.js';
 import { SystemMaintenanceService } from './server/services/systemMaintenanceService.js';
+import { healthCheckService } from './server/services/healthCheckService.js';
+import { modelRouter } from './server/services/modelRouter.js';
 import { db } from './server/db/database.js';
 import fs from 'node:fs';
 
@@ -93,6 +95,32 @@ async function startServer() {
     } catch (err: any) {
       console.error('[Darkano API] Failed to retrieve models:', err?.message);
       res.status(500).json({ error: 'Failed to load model catalog' });
+    }
+  });
+
+  // Real Multi-Model Health Check Status Endpoint
+  app.get('/api/models/health', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const forceRefresh = req.query.force === 'true';
+      const healthData = await healthCheckService.checkHealth(forceRefresh);
+      res.status(200).json(healthData);
+    } catch (err: any) {
+      console.error('[Darkano Health API] Health check failed:', err?.message);
+      res.status(500).json({ error: 'Failed to execute provider health check', details: err?.message });
+    }
+  });
+
+  // Force trigger real ping to all configured model providers
+  app.post('/api/models/health/check', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const healthData = await healthCheckService.checkHealth(true);
+      res.status(200).json({
+        message: 'Real provider verification complete',
+        ...healthData
+      });
+    } catch (err: any) {
+      console.error('[Darkano Health API] Manual health ping check failed:', err?.message);
+      res.status(500).json({ error: 'Failed to check model health', details: err?.message });
     }
   });
 
@@ -253,6 +281,7 @@ async function startServer() {
   // 5. Streaming Chat Endpoint (Authenticated)
   // ==========================================
   app.post('/api/chat/stream', requireAuth, chatRateLimiter, async (req: Request, res: Response): Promise<void> => {
+    const streamStartTime = Date.now();
     const validation = validateAndPrepareChatRequest(req.body);
 
     if (!validation.valid || !validation.sanitizedPayload) {
@@ -265,15 +294,25 @@ async function startServer() {
 
     const payload = validation.sanitizedPayload;
     const userId = req.user!.userId;
-    const provider = providerRegistry.getProviderForModel(payload.model);
 
-    if (!provider) {
-      res.status(404).json({
-        error: `No provider registered for model '${payload.model}'.`,
-        code: 'PROVIDER_NOT_FOUND'
+    // Resolve model via central router (handles Auto mode selection and strict manual allowlist verification)
+    const hasMedia = (payload.mediaIds && payload.mediaIds.length > 0) || (payload.fileIds && payload.fileIds.length > 0);
+    const resolved = modelRouter.resolveModel({
+      requestedModel: payload.model,
+      mode: payload.mode,
+      hasVision: hasMedia
+    });
+
+    if (!resolved.success || !resolved.provider) {
+      res.status(resolved.errorCode === 'NOT_CONFIGURED' ? 503 : 400).json({
+        error: resolved.error || `Unable to route model '${payload.model}'.`,
+        code: resolved.errorCode || 'MODEL_ROUTING_FAILED'
       });
       return;
     }
+
+    const provider = resolved.provider;
+    payload.model = resolved.modelKey;
 
     // Upfront Server-Side Credit Verification
     const currentBalance = CreditService.getBalance(userId);
@@ -385,6 +424,16 @@ async function startServer() {
         mode: payload.mode,
         timestamp: new Date().toISOString()
       });
+
+      // Emit auto route event if dynamic model routing was applied
+      if (resolved.isAuto) {
+        sendEvent('route', {
+          selectedModel: resolved.modelKey,
+          modelName: resolved.modelEntry?.name || resolved.modelKey,
+          provider: provider.name,
+          reason: resolved.autoReason
+        });
+      }
 
       // Prepare attached document context & multimodal inspection
       let enhancedMessage = payload.message;
@@ -684,6 +733,23 @@ async function startServer() {
             balanceAfter: deduction.balanceAfter,
             breakdown: finalCost.breakdown
           });
+
+          // Log completed AI request for auditing & observability
+          healthCheckService.logAIRequest({
+            requestId: assistantMessageId,
+            userId,
+            conversationId: payload.conversationId,
+            modelKey: resolved.modelKey,
+            providerId: provider.id,
+            modelId: resolved.modelEntry?.modelId || resolved.modelKey,
+            mode: payload.mode,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens || Math.ceil(accumulatedText.length / 4),
+            totalTokens: totalInputTokens + (totalOutputTokens || Math.ceil(accumulatedText.length / 4)),
+            creditsDeducted: finalCost.totalCredits,
+            latencyMs: Date.now() - streamStartTime,
+            status: 'COMPLETED'
+          });
         } catch (creditErr: any) {
           console.warn('[Darkano Credits] Warning during stream credit deduction:', creditErr?.message);
         }
@@ -697,8 +763,28 @@ async function startServer() {
           content: accumulatedText,
           status: 'error'
         });
+
+        healthCheckService.logAIRequest({
+          requestId: assistantMessageId,
+          userId,
+          conversationId: payload.conversationId,
+          modelKey: resolved.modelKey,
+          providerId: provider.id,
+          modelId: resolved.modelEntry?.modelId || resolved.modelKey,
+          mode: payload.mode,
+          inputTokens: totalInputTokens,
+          outputTokens: Math.ceil(accumulatedText.length / 4),
+          totalTokens: totalInputTokens + Math.ceil(accumulatedText.length / 4),
+          creditsDeducted: 0,
+          latencyMs: Date.now() - streamStartTime,
+          status: 'FAILED',
+          errorMessage: streamError?.message || 'Stream generation failed'
+        });
+
         sendEvent('error', {
-          error: 'Generation stream was interrupted. Please retry.',
+          error: `Inference failed on model '${resolved.modelKey}' via provider '${provider.name}': ${streamError?.message || 'Generation stream was interrupted.'}`,
+          model: resolved.modelKey,
+          provider: provider.name,
           code: 'STREAM_EXCEPTION'
         });
       }
@@ -709,8 +795,9 @@ async function startServer() {
     }
   });
 
-  // 6. Non-streaming chat endpoint (Fallback)
+  // 6. Non-streaming chat endpoint (Real Multi-Model Execution)
   app.post('/api/chat', requireAuth, chatRateLimiter, async (req: Request, res: Response): Promise<void> => {
+    const startTime = Date.now();
     const validation = validateAndPrepareChatRequest(req.body);
 
     if (!validation.valid || !validation.sanitizedPayload) {
@@ -723,18 +810,54 @@ async function startServer() {
 
     const payload = validation.sanitizedPayload;
     const userId = req.user!.userId;
-    const provider = providerRegistry.getProviderForModel(payload.model);
 
-    if (!provider) {
-      res.status(404).json({
-        error: `No provider registered for model '${payload.model}'.`,
-        code: 'PROVIDER_NOT_FOUND'
+    // Resolve model via central router
+    const hasMedia = (payload.mediaIds && payload.mediaIds.length > 0) || (payload.fileIds && payload.fileIds.length > 0);
+    const resolved = modelRouter.resolveModel({
+      requestedModel: payload.model,
+      mode: payload.mode,
+      hasVision: hasMedia
+    });
+
+    if (!resolved.success || !resolved.provider) {
+      res.status(resolved.errorCode === 'NOT_CONFIGURED' ? 503 : 400).json({
+        error: resolved.error || `Unable to route model '${payload.model}'.`,
+        code: resolved.errorCode || 'MODEL_ROUTING_FAILED'
       });
       return;
     }
 
+    const provider = resolved.provider;
+    payload.model = resolved.modelKey;
+
+    // Upfront Server-Side Credit Verification
+    const currentBalance = CreditService.getBalance(userId);
+    const estimatedCost = CreditService.calculateCost({
+      modelId: payload.model,
+      mode: payload.mode,
+      webSearch: Boolean(req.body.webSearch) || payload.mode === 'research',
+      fileCount: payload.fileIds?.length || 0
+    });
+
+    if (currentBalance < estimatedCost.totalCredits) {
+      res.status(402).json({
+        error: `Insufficient credits. This request requires ~${estimatedCost.totalCredits} credits, but your current balance is ${currentBalance}. Please upgrade your plan or top up your credits.`,
+        code: 'INSUFFICIENT_CREDITS',
+        required: estimatedCost.totalCredits,
+        available: currentBalance
+      });
+      return;
+    }
+
+    const assistantMessageId = `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
     try {
+      // Execute REAL request to configured provider
       const chatResponse = await provider.chat(payload);
+
+      if (chatResponse.status === 'error') {
+        throw new Error(chatResponse.errorMessage || 'Provider returned error status');
+      }
 
       // Save user & assistant messages to DB
       if (payload.message) {
@@ -749,6 +872,7 @@ async function startServer() {
       }
 
       ConversationService.saveMessage(userId, {
+        id: assistantMessageId,
         conversationId: payload.conversationId,
         role: 'assistant',
         content: chatResponse.content,
@@ -757,23 +881,101 @@ async function startServer() {
         status: 'ready'
       });
 
-      if (chatResponse.usage) {
-        ConversationService.recordUsage(userId, {
-          conversationId: payload.conversationId,
-          model: payload.model,
-          provider: provider.id,
-          inputTokens: chatResponse.usage.promptTokens || 0,
-          outputTokens: chatResponse.usage.completionTokens || 0,
-          totalTokens: chatResponse.usage.totalTokens || 0
-        });
-      }
+      const inputTokens = chatResponse.usage?.promptTokens || 0;
+      const outputTokens = chatResponse.usage?.completionTokens || Math.ceil(chatResponse.content.length / 4);
+      const totalTokens = chatResponse.usage?.totalTokens || (inputTokens + outputTokens);
 
-      res.status(200).json(chatResponse);
+      ConversationService.recordUsage(userId, {
+        conversationId: payload.conversationId,
+        model: payload.model,
+        provider: provider.id,
+        inputTokens,
+        outputTokens,
+        totalTokens
+      });
+
+      // Atomically deduct real credits on success
+      const finalCost = CreditService.calculateCost({
+        modelId: payload.model,
+        mode: payload.mode,
+        webSearch: payload.mode === 'research',
+        fileCount: payload.fileIds?.length || 0,
+        inputTokens,
+        outputTokens
+      });
+
+      const deduction = CreditService.deductCredits({
+        userId,
+        amount: finalCost.totalCredits,
+        type: 'ai_usage',
+        source: 'chat_non_stream',
+        metadata: {
+          conversationId: payload.conversationId,
+          messageId: assistantMessageId,
+          model: payload.model,
+          mode: payload.mode,
+          tokens: totalTokens,
+          breakdown: finalCost.breakdown
+        },
+        idempotencyKey: `usage_${assistantMessageId}`
+      });
+
+      // Log to audit table
+      healthCheckService.logAIRequest({
+        requestId: assistantMessageId,
+        userId,
+        conversationId: payload.conversationId,
+        modelKey: resolved.modelKey,
+        providerId: provider.id,
+        modelId: resolved.modelEntry?.modelId || resolved.modelKey,
+        mode: payload.mode,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        creditsDeducted: finalCost.totalCredits,
+        latencyMs: Date.now() - startTime,
+        status: 'COMPLETED'
+      });
+
+      res.status(200).json({
+        ...chatResponse,
+        credits: {
+          consumed: finalCost.totalCredits,
+          balanceAfter: deduction.balanceAfter
+        },
+        routedModel: resolved.isAuto ? {
+          selectedModel: resolved.modelKey,
+          modelName: resolved.modelEntry?.name || resolved.modelKey,
+          provider: provider.name,
+          reason: resolved.autoReason
+        } : undefined
+      });
     } catch (err: any) {
       console.error('[Darkano API Non-Stream Error]:', err?.message);
-      res.status(500).json({
-        error: 'Failed to process chat response',
-        code: 'INTERNAL_ERROR'
+
+      // Log failure in audit table
+      healthCheckService.logAIRequest({
+        requestId: assistantMessageId,
+        userId,
+        conversationId: payload.conversationId,
+        modelKey: resolved.modelKey,
+        providerId: provider.id,
+        modelId: resolved.modelEntry?.modelId || resolved.modelKey,
+        mode: payload.mode,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        creditsDeducted: 0,
+        latencyMs: Date.now() - startTime,
+        status: 'FAILED',
+        errorMessage: err?.message || 'Chat inference failed'
+      });
+
+      res.status(502).json({
+        error: `Inference failed on model '${resolved.modelKey}' via provider '${provider.name}': ${err?.message || 'Request failed.'}`,
+        model: resolved.modelKey,
+        provider: provider.name,
+        code: 'PROVIDER_INFERENCE_ERROR'
       });
     }
   });

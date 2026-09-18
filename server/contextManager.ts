@@ -1,6 +1,7 @@
 import { ChatRequestPayload, ChatHistoryMessage, WorkspaceMode } from './types.js';
 import { SERVER_CONFIG, getAssembledSystemPrompt } from './config.js';
 import { providerRegistry } from './providers/registry.js';
+import { validateModelAllowlist, getRegisteredModel } from './providers/modelRegistry.js';
 
 export interface ValidationResult {
   valid: boolean;
@@ -12,6 +13,7 @@ export interface ValidationResult {
     model: string;
     mode: WorkspaceMode;
     fileIds: string[];
+    mediaIds: string[];
     history: ChatHistoryMessage[];
     resolvedSystemPrompt: string;
     options: {
@@ -21,7 +23,7 @@ export interface ValidationResult {
   };
 }
 
-const ALLOWED_MODES: WorkspaceMode[] = ['chat', 'code', 'research', 'analyze'];
+const ALLOWED_MODES: WorkspaceMode[] = ['chat', 'code', 'research', 'analyze', 'agent'];
 
 export function validateAndPrepareChatRequest(payload: any): ValidationResult {
   if (!payload || typeof payload !== 'object') {
@@ -29,11 +31,14 @@ export function validateAndPrepareChatRequest(payload: any): ValidationResult {
   }
 
   const rawMessage = payload.message;
-  if (typeof rawMessage !== 'string' || rawMessage.trim().length === 0) {
-    return { valid: false, error: 'Message content cannot be empty.', code: 'EMPTY_MESSAGE' };
+  const rawFileIds = Array.isArray(payload.fileIds) ? payload.fileIds : [];
+  const rawMediaIds = Array.isArray(payload.mediaIds) ? payload.mediaIds : [];
+
+  if ((typeof rawMessage !== 'string' || rawMessage.trim().length === 0) && rawFileIds.length === 0 && rawMediaIds.length === 0) {
+    return { valid: false, error: 'Message content or attachments must be provided.', code: 'EMPTY_MESSAGE' };
   }
 
-  const trimmedMessage = rawMessage.trim();
+  const trimmedMessage = typeof rawMessage === 'string' ? rawMessage.trim() : '';
   if (trimmedMessage.length > SERVER_CONFIG.maxMessageLength) {
     return {
       valid: false,
@@ -48,24 +53,18 @@ export function validateAndPrepareChatRequest(payload: any): ValidationResult {
   }
   const mode: WorkspaceMode = rawMode;
 
-  const rawModel = payload.model || 'darkano-ultra-v2';
-  const allModels = providerRegistry.getAllModels();
-  const matchedModel = allModels.find(m => m.id === rawModel);
+  const rawModel = (payload.model || 'darkano-ultra-v2').trim();
 
-  if (!matchedModel) {
-    return {
-      valid: false,
-      error: `Requested model '${rawModel}' is not recognized in the Darkano catalog.`,
-      code: 'UNKNOWN_MODEL'
-    };
-  }
-
-  if (!matchedModel.isAvailable) {
-    return {
-      valid: false,
-      error: `Model '${matchedModel.name}' (${matchedModel.provider}) is currently unconfigured on this cluster. Please select an available model (such as Darkano Ultra v2 or Gemini 3.8 Flash).`,
-      code: 'MODEL_UNAVAILABLE'
-    };
+  // Validate model allowlist (or auto)
+  if (rawModel !== 'auto') {
+    const modelValidation = validateModelAllowlist(rawModel);
+    if (!modelValidation.valid) {
+      return {
+        valid: false,
+        error: modelValidation.error || `Model '${rawModel}' is not allowed or recognized.`,
+        code: modelValidation.code || 'UNKNOWN_MODEL'
+      };
+    }
   }
 
   // Sanitize history
@@ -102,8 +101,12 @@ export function validateAndPrepareChatRequest(payload: any): ValidationResult {
     ? Math.max(0.1, Math.min(1, payload.options.topP))
     : 0.95;
 
-  const rawFileIds = Array.isArray(payload.fileIds) ? payload.fileIds : [];
   const fileIds: string[] = rawFileIds
+    .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
+    .map((id: string) => id.trim())
+    .slice(0, 10);
+
+  const mediaIds: string[] = rawMediaIds
     .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
     .map((id: string) => id.trim())
     .slice(0, 10);
@@ -116,6 +119,7 @@ export function validateAndPrepareChatRequest(payload: any): ValidationResult {
       model: rawModel,
       mode,
       fileIds,
+      mediaIds,
       history: sanitizedHistory,
       resolvedSystemPrompt,
       options: {

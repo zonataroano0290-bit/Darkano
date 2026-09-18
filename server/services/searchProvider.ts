@@ -199,7 +199,7 @@ export class WebSearchService implements SearchProvider {
     const client = this.getClient();
 
     const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-3-flash-preview',
       contents: `Search the live web for the following query and provide verified factual resources: "${query}"`,
       config: {
         tools: [{ googleSearch: {} }] as any
@@ -245,9 +245,9 @@ export class WebSearchService implements SearchProvider {
 
     const client = this.getClient();
 
-    // Use gemini-3.8-flash with googleSearch tool for real-time live grounding
+    // Use gemini-3-flash-preview with googleSearch tool for real-time live grounding
     const responseStream = await client.models.generateContentStream({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-3-flash-preview',
       contents: query,
       config: {
         systemInstruction:

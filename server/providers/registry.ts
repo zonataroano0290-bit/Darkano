@@ -1,7 +1,11 @@
 import { BaseAIProvider } from './base.js';
 import { GeminiProvider } from './gemini.js';
 import { DarkanoProvider } from './darkano.js';
-import { ServerModelInfo } from '../types.js';
+import { OpenAIProvider } from './openai.js';
+import { AnthropicProvider } from './anthropic.js';
+import { XAIProvider } from './xai.js';
+import { ServerModelInfo, ModelHealthCheckResult } from '../types.js';
+import { MODEL_REGISTRY, getRegisteredModel } from './modelRegistry.js';
 
 export class ProviderRegistry {
   private providers: Map<string, BaseAIProvider> = new Map();
@@ -10,160 +14,162 @@ export class ProviderRegistry {
   constructor() {
     const darkano = new DarkanoProvider();
     const gemini = new GeminiProvider();
+    const openai = new OpenAIProvider();
+    const anthropic = new AnthropicProvider();
+    const xai = new XAIProvider();
 
     this.registerProvider(darkano);
     this.registerProvider(gemini);
+    this.registerProvider(openai);
+    this.registerProvider(anthropic);
+    this.registerProvider(xai);
+
+    // Map all models in MODEL_REGISTRY to their respective providers
+    this.syncModelRegistryMappings();
   }
 
   registerProvider(provider: BaseAIProvider) {
     this.providers.set(provider.id, provider);
-    for (const model of provider.getModels()) {
-      this.modelProviderMap.set(model.id, provider);
+  }
+
+  private syncModelRegistryMappings() {
+    for (const [key, entry] of Object.entries(MODEL_REGISTRY)) {
+      const provider = this.providers.get(entry.provider);
+      if (provider) {
+        this.modelProviderMap.set(key, provider);
+      }
     }
+  }
+
+  getProvider(providerId: string): BaseAIProvider | null {
+    return this.providers.get(providerId) || null;
   }
 
   getProviderForModel(modelId: string): BaseAIProvider | null {
-    return this.modelProviderMap.get(modelId) || null;
+    if (!modelId) return null;
+    const cleanId = modelId.trim();
+
+    // Check direct mapping from MODEL_REGISTRY
+    const mapped = this.modelProviderMap.get(cleanId);
+    if (mapped) return mapped;
+
+    // Check by registered model entry provider
+    const entry = getRegisteredModel(cleanId);
+    if (entry) {
+      const prov = this.providers.get(entry.provider);
+      if (prov) return prov;
+    }
+
+    // Default heuristics based on prefix
+    if (cleanId.startsWith('gemini')) return this.providers.get('google') || null;
+    if (cleanId.startsWith('gpt')) return this.providers.get('openai') || null;
+    if (cleanId.startsWith('claude')) return this.providers.get('anthropic') || null;
+    if (cleanId.startsWith('grok')) return this.providers.get('xai') || null;
+    if (cleanId.startsWith('darkano')) return this.providers.get('darkano') || null;
+
+    return null;
+  }
+
+  getAllProviders(): BaseAIProvider[] {
+    return Array.from(this.providers.values());
   }
 
   getAllModels(): ServerModelInfo[] {
-    const models: ServerModelInfo[] = [];
+    const list: ServerModelInfo[] = [];
 
-    // Registered providers
-    for (const provider of this.providers.values()) {
-      models.push(...provider.getModels());
+    for (const [key, entry] of Object.entries(MODEL_REGISTRY)) {
+      const provider = this.providers.get(entry.provider);
+      const isConfigured = provider ? provider.isConfigured() : false;
+
+      list.push({
+        id: entry.key,
+        name: entry.name,
+        provider: provider ? provider.name : entry.provider,
+        category: entry.category,
+        description: entry.description,
+        contextWindow: entry.contextWindow,
+        maxOutputTokens: entry.maxOutputTokens,
+        latencyTier: entry.latencyTier,
+        capabilities: entry.capabilities,
+        capabilityMatrix: entry.capabilityMatrix,
+        isAvailable: isConfigured && entry.enabled,
+        streamingSupported: entry.streamingSupported,
+        accentColor: entry.accentColor
+      });
     }
 
-    // Unconfigured third-party providers shown with accurate availability
-    const hasOpenAI = Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0);
-    const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY.trim().length > 0);
-    const hasDeepSeek = Boolean(process.env.DEEPSEEK_API_KEY && process.env.DEEPSEEK_API_KEY.trim().length > 0);
-
-    models.push(
-      {
-        id: 'claude-3.7-sonnet',
-        name: 'Claude 3.7 Sonnet',
-        provider: 'Anthropic',
-        category: 'reasoning',
-        description: 'Hybrid architecture combining fast inference with dynamic extended thinking tokens for complex engineering.',
-        contextWindow: '200k tokens',
-        maxOutputTokens: '64k tokens',
-        latencyTier: 'Deep Think',
-        capabilities: ['Hybrid Reasoning', 'Long Output Generation', 'Agentic Execution', 'Nuance'],
-        capabilityMatrix: {
-          text: true,
-          vision: true,
-          image_generation: false,
-          image_editing: false,
-          audio_input: false,
-          audio_output: false,
-          speech_to_text: false,
-          text_to_speech: false,
-          video_input: false,
-          long_context: true
-        },
-        isAvailable: hasAnthropic,
-        streamingSupported: true,
-        accentColor: '#d97706'
-      },
-      {
-        id: 'gpt-4o',
-        name: 'GPT-4o',
-        provider: 'OpenAI',
-        category: 'flagship',
-        description: 'High-intelligence omni model supporting unified reasoning across text, code, vision, and tool calling.',
-        contextWindow: '128k tokens',
-        maxOutputTokens: '16k tokens',
-        latencyTier: 'Fast',
-        capabilities: ['Omni Modality', 'Structured JSON', 'Function Calling', 'Instruction Following'],
-        capabilityMatrix: {
-          text: true,
-          vision: true,
-          image_generation: false,
-          image_editing: false,
-          audio_input: true,
-          audio_output: false,
-          speech_to_text: true,
-          text_to_speech: false,
-          video_input: true,
-          long_context: true
-        },
-        isAvailable: hasOpenAI,
-        streamingSupported: true,
-        accentColor: '#10a37f'
-      },
-      {
-        id: 'deepseek-r1',
-        name: 'DeepSeek R1',
-        provider: 'DeepSeek',
-        category: 'reasoning',
-        description: 'Open-weight frontier reasoning model trained via large-scale reinforcement learning for step-by-step mathematical proofs.',
-        contextWindow: '64k tokens',
-        maxOutputTokens: '8k tokens',
-        latencyTier: 'Deep Think',
-        capabilities: ['Chain-of-Thought', 'Formal Verification', 'Math Competition', 'Logic Puzzles'],
-        capabilityMatrix: {
-          text: true,
-          vision: false,
-          image_generation: false,
-          image_editing: false,
-          audio_input: false,
-          audio_output: false,
-          speech_to_text: false,
-          text_to_speech: false,
-          video_input: false,
-          long_context: false
-        },
-        isAvailable: hasDeepSeek,
-        streamingSupported: true,
-        accentColor: '#6366f1'
-      },
-      {
-        id: 'llama-3.3-70b',
-        name: 'Llama 3.3 70B',
-        provider: 'Meta',
-        category: 'open-weights',
-        description: 'Enterprise open-weights model balancing industry-standard safety benchmarks with state-of-the-art coding and dialogue.',
-        contextWindow: '128k tokens',
-        maxOutputTokens: '8k tokens',
-        latencyTier: 'Balanced',
-        capabilities: ['Private Hostable', 'Enterprise Tooling', 'Multilingual', 'Cost Optimized'],
-        capabilityMatrix: {
-          text: true,
-          vision: false,
-          image_generation: false,
-          image_editing: false,
-          audio_input: false,
-          audio_output: false,
-          speech_to_text: false,
-          text_to_speech: false,
-          video_input: false,
-          long_context: true
-        },
-        isAvailable: false,
-        streamingSupported: true,
-        accentColor: '#0ea5e9'
-      }
-    );
-
-    return models;
+    return list;
   }
 
-  getHealth() {
+  getAvailableProviderIds(): Set<string> {
+    const configured = new Set<string>();
+    for (const [id, provider] of this.providers.entries()) {
+      if (provider.isConfigured()) {
+        configured.add(id);
+      }
+    }
+    return configured;
+  }
+
+  async runHealthChecks(): Promise<ModelHealthCheckResult[]> {
+    const results: ModelHealthCheckResult[] = [];
+
+    // Health check one primary model per registered provider
+    const providerPrimaryModel: Record<string, string> = {
+      darkano: 'darkano-ultra-v2',
+      google: 'gemini-3-flash-preview',
+      openai: 'gpt-4o',
+      anthropic: 'claude-3.7-sonnet',
+      xai: 'grok-2'
+    };
+
+    for (const [providerId, provider] of this.providers.entries()) {
+      const primaryKey = providerPrimaryModel[providerId] || 'default';
+      try {
+        const result = await provider.healthCheck(primaryKey);
+        results.push(result);
+      } catch (err: any) {
+        results.push({
+          modelKey: primaryKey,
+          provider: providerId,
+          modelId: primaryKey,
+          status: 'PROVIDER_ERROR',
+          error: err?.message || 'Health check execution crashed',
+          checkedAt: new Date().toISOString()
+        });
+      }
+    }
+
+    return results;
+  }
+
+  getHealthSummary() {
     const configuredProviders: string[] = [];
+    const unconfiguredProviders: string[] = [];
+
     for (const [id, provider] of this.providers.entries()) {
       if (provider.isConfigured()) {
         configuredProviders.push(provider.name);
+      } else {
+        unconfiguredProviders.push(provider.name);
       }
     }
+
+    const allModels = this.getAllModels();
+    const availableCount = allModels.filter(m => m.isAvailable).length;
 
     return {
       status: configuredProviders.length > 0 ? 'healthy' : 'degraded',
       configuredProviders,
-      totalModels: this.getAllModels().length,
-      availableModels: this.getAllModels().filter(m => m.isAvailable).length,
+      unconfiguredProviders,
+      totalModels: allModels.length,
+      availableModels: availableCount,
       timestamp: new Date().toISOString()
     };
+  }
+
+  getHealth() {
+    return this.getHealthSummary();
   }
 }
 
