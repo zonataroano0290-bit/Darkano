@@ -11,7 +11,8 @@ import {
   SettingsTab,
   ViewSection,
   AuthUser,
-  MediaItem
+  MediaItem,
+  CyberAction
 } from '../types';
 import { AI_MODELS, DEFAULT_MODEL_ID } from '../data/models';
 
@@ -58,7 +59,7 @@ interface WorkspaceContextType {
 
   // Active Chat State & Messages
   messages: ChatMessage[];
-  sendMessage: (content: string, files?: UploadedFile[], media?: MediaItem[]) => void;
+  sendMessage: (content: string, files?: UploadedFile[], media?: MediaItem[], cyberAction?: CyberAction) => void;
   regenerateMessage: (messageId: string) => void;
   deleteMessage: (messageId: string) => void;
   isLoading: boolean;
@@ -100,6 +101,9 @@ interface WorkspaceContextType {
   setImageGenModalOpen: (open: boolean) => void;
   isVoiceChatModalOpen: boolean;
   setVoiceChatModalOpen: (open: boolean) => void;
+  isWebsiteAnalysisModalOpen: boolean;
+  setWebsiteAnalysisModalOpen: (open: boolean) => void;
+  analyzeWebsiteUrlAction: (url: string, deepInspection?: boolean) => Promise<any>;
 
   // User Profile & Settings
   userProfile: UserProfile;
@@ -238,6 +242,26 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [activeLightboxImage, setActiveLightboxImage] = useState<MediaItem | null>(null);
   const [isImageGenModalOpen, setImageGenModalOpen] = useState(false);
   const [isVoiceChatModalOpen, setVoiceChatModalOpen] = useState(false);
+  const [isWebsiteAnalysisModalOpen, setWebsiteAnalysisModalOpen] = useState(false);
+
+  // Live Cybersecurity Website URL Audit Action
+  const analyzeWebsiteUrlAction = useCallback(async (targetUrl: string, deepInspection: boolean = false) => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch('/api/security/analyze-url', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ url: targetUrl, deepInspection })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Security analysis probe failed (${res.status})`);
+    }
+    const data = await res.json();
+    return data.analysis;
+  }, [token]);
 
   const clearAuthError = () => setAuthError(null);
 
@@ -869,7 +893,8 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const sendMessage = async (
     content: string,
     filesToAttach: UploadedFile[] = stagedComposerFiles,
-    mediaToAttach: MediaItem[] = stagedMedia
+    mediaToAttach: MediaItem[] = stagedMedia,
+    cyberAction?: CyberAction
   ) => {
     const trimmed = content.trim();
     if (!trimmed && filesToAttach.length === 0 && mediaToAttach.length === 0) return;
@@ -980,6 +1005,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           mode: activeMode,
           fileIds: fileIdsPayload,
           mediaIds: mediaIdsPayload,
+          cyberAction,
           history: historyPayload,
           options: {
             temperature: settings.chat.temperature,
@@ -1141,6 +1167,18 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     creditsUsed: parsed.creditsUsed ?? prev.creditsUsed
                   };
                 };
+              } else if (parsed.stage === 'probing_security_headers') {
+                stageLabel = `Probing live DNS, TLS 1.3 & HTTP security headers for ${parsed.target || 'target'}...`;
+              } else if (parsed.stage === 'analyzing_vulnerabilities') {
+                stageLabel = `Auditing OWASP & CVE vulnerabilities (Score: ${parsed.score}/100, Grade: ${parsed.grade})...`;
+              } else if (parsed.stage === 'searching_cve_threat_intel') {
+                stageLabel = `Searching global threat feeds & MITRE ATT&CK database...`;
+              } else if (parsed.stage === 'network_packet_analysis') {
+                stageLabel = `Analyzing TCP/IP headers, packet flow & firewall telemetry...`;
+              } else if (parsed.stage === 'cwe_vulnerability_audit') {
+                stageLabel = `Running CWE & OWASP Top 10 vulnerability audit...`;
+              } else if (parsed.stage === 'deep_cyber_disassembly_triage') {
+                stageLabel = `Decompiling instructions & analyzing memory safety vectors...`;
               } else if (parsed.stage === 'searching') {
                 stageLabel = `Searching live web for "${parsed.query || 'query'}"...`;
               } else if (parsed.stage === 'retrieving_context') {
@@ -1168,6 +1206,26 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                             currentStage: stageLabel,
                             agentTaskId: parsed.taskId || m.agentTaskId,
                             agentTask: updatedTask
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return c;
+                })
+              );
+            } else if (eventType === 'security_audit' && parsed) {
+              setConversations(prev =>
+                prev.map(c => {
+                  if (c.id === targetConvId) {
+                    return {
+                      ...c,
+                      messages: c.messages.map(m => {
+                        if (m.id === assistantMessageId) {
+                          return {
+                            ...m,
+                            securityAudit: parsed
                           };
                         }
                         return m;
@@ -1991,6 +2049,9 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setImageGenModalOpen,
     isVoiceChatModalOpen,
     setVoiceChatModalOpen,
+    isWebsiteAnalysisModalOpen,
+    setWebsiteAnalysisModalOpen,
+    analyzeWebsiteUrlAction,
 
     // User Profile & Settings
     userProfile,

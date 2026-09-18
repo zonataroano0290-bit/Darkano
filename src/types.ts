@@ -1,4 +1,11 @@
-export type WorkspaceMode = 'chat' | 'code' | 'research' | 'analyze' | 'agent';
+export type WorkspaceMode = 'chat' | 'code' | 'research' | 'analyze' | 'agent' | 'cybersecurity';
+
+export type CyberAction =
+  | 'website_analysis'
+  | 'security_research'
+  | 'network_intelligence'
+  | 'vulnerability_analysis'
+  | 'deep_cyber_analysis';
 
 export type AgentTaskStatus =
   | 'queued'
@@ -200,6 +207,7 @@ export interface ChatMessage {
   metrics?: ChatMessageMetrics;
   ttsAudioUrl?: string;
   isSynthesizingTts?: boolean;
+  securityAudit?: any;
 }
 
 export interface Conversation {

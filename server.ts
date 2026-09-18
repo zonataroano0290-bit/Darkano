@@ -27,6 +27,7 @@ import { AgentTaskService } from './server/db/agentTaskService.js';
 import { AgentEngine } from './server/services/agentEngine.js';
 import { MediaService } from './server/services/mediaService.js';
 import { MultimodalService } from './server/services/multimodalService.js';
+import { SecurityAnalysisService } from './server/services/securityAnalysisService.js';
 import { ProjectService } from './server/db/projectService.js';
 import { ProjectBuildService } from './server/services/projectBuildService.js';
 import { ProjectAiService } from './server/services/projectAiService.js';
@@ -435,13 +436,8 @@ async function startServer() {
         const targetModel = provider.getModels().find(m => m.id === payload.model);
         if (targetModel) {
           if (hasImage && !targetModel.capabilityMatrix.vision) {
-            sendEvent('error', {
-              error: `Selected model '${targetModel.name}' does not support vision or image analysis. Please switch to a vision-capable model (e.g. Gemini 3.8 Flash, Gemini 2.5 Pro, or Darkano Ultra).`,
-              code: 'UNSUPPORTED_CAPABILITY'
-            });
-            sendEvent('done', { status: 'failed' });
-            res.end();
-            return;
+            // Automatically upgrade or guide to vision model
+            payload.model = 'darkano-ultra-v2';
           }
           if (hasAudio && !targetModel.capabilityMatrix.audio_input) {
             sendEvent('error', {
@@ -452,6 +448,43 @@ async function startServer() {
             res.end();
             return;
           }
+        }
+      }
+
+      // Cyber Security Actions & Live URL Probe Detection
+      const cyberAction = (payload as any).cyberAction;
+      if (cyberAction === 'security_research') {
+        sendEvent('stage', { stage: 'searching_cve_threat_intel', query: payload.message });
+      } else if (cyberAction === 'network_intelligence') {
+        sendEvent('stage', { stage: 'network_packet_analysis', query: payload.message });
+      } else if (cyberAction === 'vulnerability_analysis') {
+        sendEvent('stage', { stage: 'cwe_vulnerability_audit', query: payload.message });
+      } else if (cyberAction === 'deep_cyber_analysis') {
+        sendEvent('stage', { stage: 'deep_cyber_disassembly_triage', query: payload.message });
+      }
+
+      // Check if message specifies a website URL for security analysis
+      const urlMatches = payload.message.match(/https?:\/\/[^\s<>"')]+|www\.[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s<>"')]+/i);
+      const isSecurityAuditQuery = cyberAction === 'website_analysis' || /scan|analyz|audit|vulnerabilit|pentest|security\s+(check|posture|review|report)|ssl|headers|owasp/i.test(payload.message);
+
+      if (urlMatches && isSecurityAuditQuery) {
+        const detectedUrl = urlMatches[0];
+        try {
+          sendEvent('stage', { stage: 'probing_security_headers', target: detectedUrl });
+          const securityAnalysis = await SecurityAnalysisService.analyze(detectedUrl);
+          sendEvent('stage', {
+            stage: 'analyzing_vulnerabilities',
+            score: securityAnalysis.score,
+            grade: securityAnalysis.grade,
+            riskLevel: securityAnalysis.riskLevel,
+            findingsCount: securityAnalysis.findings.length
+          });
+          sendEvent('security_audit', securityAnalysis);
+
+          const telemetryText = SecurityAnalysisService.formatTelemetryPrompt(securityAnalysis);
+          enhancedMessage = `${enhancedMessage}\n\n${telemetryText}\n\n[DIRECTIVE]: You are Darkano Cyber AI. Review the authentic technical telemetry above for ${securityAnalysis.hostname}. Structure an elite cybersecurity audit report with: Executive Threat Summary, Cryptographic & TLS Posture, HTTP Security Headers & Browser Hardening, OWASP/CWE Vulnerability Matrix, Realistic Attack Scenarios, and Production-Grade Remediation Code/Configs.`;
+        } catch (auditErr: any) {
+          console.warn('[SecurityProbe] URL live audit notice:', auditErr?.message);
         }
       }
 
@@ -926,6 +959,23 @@ async function startServer() {
     } catch (err: any) {
       console.error('[Darkano Fetch Page Error]:', err?.message);
       res.status(400).json({ error: err?.message || 'Failed to fetch web page', code: 'FETCH_FAILED' });
+    }
+  });
+
+  // Dedicated Cybersecurity URL Analysis Endpoint
+  app.post('/api/security/analyze-url', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { url } = req.body || {};
+      if (!url || typeof url !== 'string') {
+        res.status(400).json({ error: 'Target URL is required.', code: 'URL_REQUIRED' });
+        return;
+      }
+
+      const analysis = await SecurityAnalysisService.analyze(url.trim());
+      res.status(200).json({ success: true, analysis });
+    } catch (err: any) {
+      console.error('[Darkano Security URL Analysis Error]:', err?.message);
+      res.status(400).json({ error: err?.message || 'Failed to analyze website security', code: 'ANALYSIS_FAILED' });
     }
   });
 

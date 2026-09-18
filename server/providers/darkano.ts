@@ -191,17 +191,14 @@ export class DarkanoProvider extends BaseAIProvider {
     }
 
     // Select primary model based on Darkano specification
-    let targetModel = 'gemini-3.5-flash-lite';
-    if (options.model === 'darkano-ultra-v2') {
-      targetModel = 'gemini-3.5-flash';
-    } else if (options.model === 'darkano-code-x') {
-      targetModel = 'gemini-3.5-flash';
-    } else if (options.model === 'darkano-flash-v2') {
+    let targetModel = 'gemini-3.5-flash';
+    if (options.model === 'darkano-flash-v2' && (!options.multimodalParts || options.multimodalParts.length === 0)) {
       targetModel = 'gemini-3.5-flash-lite';
     }
 
-    // If research mode is active, enable Google Search Grounding
-    const tools = options.mode === 'research' ? [{ googleSearch: {} }] : undefined;
+    // If research mode or security research / web search is requested, enable Google Search Grounding
+    const enableSearch = options.mode === 'research' || Boolean((options as any).webSearch) || (options as any).cyberAction === 'security_research';
+    const tools = enableSearch ? [{ googleSearch: {} }] : undefined;
 
     const tryGenerate = async (modelToUse: string) => {
       return await client.models.generateContentStream({

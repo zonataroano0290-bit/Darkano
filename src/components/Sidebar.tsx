@@ -18,6 +18,8 @@ import {
   ChevronDown,
   ChevronRight,
   ShieldCheck,
+  ShieldAlert,
+  Globe,
   Zap,
   CreditCard
 } from 'lucide-react';
@@ -44,6 +46,7 @@ export const Sidebar: React.FC = () => {
     renameConversation,
     deleteConversation,
     openModal,
+    setWebsiteAnalysisModalOpen,
     userProfile,
     currentUser
   } = useWorkspace();
@@ -209,6 +212,23 @@ export const Sidebar: React.FC = () => {
             </button>
 
             <button
+              onClick={() => handleModeSelect('cybersecurity')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                activeMode === 'cybersecurity' && currentView === 'workspace'
+                  ? 'bg-rose-950/50 text-rose-100 border border-rose-700/30 shadow-sm'
+                  : 'text-slate-300 hover:text-white hover:bg-white/[0.04]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <ShieldAlert className="w-4 h-4 text-rose-400" />
+                <span>Cyber AI</span>
+              </div>
+              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                PRO
+              </span>
+            </button>
+
+            <button
               onClick={() => handleModeSelect('code')}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                 activeMode === 'code' && currentView === 'workspace'
@@ -250,6 +270,24 @@ export const Sidebar: React.FC = () => {
             <div className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-rose-300/80 font-semibold">
               Tools
             </div>
+
+            {/* Website URL Security Audit Tool */}
+            <button
+              onClick={() => {
+                setActiveMode('cybersecurity');
+                setWebsiteAnalysisModalOpen(true);
+                handleClose();
+              }}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.04] transition-all cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5">
+                <Globe className="w-4 h-4 text-cyan-400" />
+                <span>Website URL Audit</span>
+              </div>
+              <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-cyan-950/60 border border-cyan-800/40 text-cyan-300 font-semibold">
+                PROBE
+              </span>
+            </button>
 
             {/* Chat History Expandable Item */}
             <div className="space-y-1">

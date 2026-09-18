@@ -5,7 +5,12 @@ import { useWorkspace } from '../context/WorkspaceContext';
 export const EmptyState: React.FC = () => {
   const { sendMessage, activeMode } = useWorkspace();
 
-  const samplePrompts = [
+  const samplePrompts = activeMode === 'cybersecurity' ? [
+    { label: 'Audit Website Security & Headers', prompt: 'Analyze the security posture of https://example.com, inspecting DNS, TLS 1.3, CSP, and OWASP Top 10 vulnerabilities.' },
+    { label: 'CVE-2024 Vulnerability Threat Intel', prompt: 'Perform in-depth threat intelligence research on recent critical CVEs affecting Linux OpenSSH and enterprise firewalls.' },
+    { label: 'Network Packet & TCP/IP Telemetry', prompt: 'Analyze anomalous TCP SYN flood patterns and provide Suricata/Snort intrusion detection rules with mitigation steps.' },
+    { label: 'Malware Triage & Reverse Engineering', prompt: 'Explain the methodology to reverse engineer a suspicious ELF binary, extract C2 indicators, and analyze anti-debugging tricks.' }
+  ] : [
     { label: 'Autonomous Multi-Step Research', prompt: 'Research recent breakthroughs in photonic quantum computing, verify source claims, and synthesize a structured analysis.' },
     { label: 'Write a high-performance LRU cache', prompt: 'Write a production-ready, high-performance thread-safe LRU cache in TypeScript with O(1) ops.' },
     { label: 'Analyze distributed consensus', prompt: 'Explain the core architectural trade-offs between Raft, Paxos, and Zab in distributed systems.' }
@@ -20,11 +25,13 @@ export const EmptyState: React.FC = () => {
 
       {/* Short, elegant welcome headline */}
       <h1 className="text-2xl sm:text-3xl md:text-4xl font-semibold text-white tracking-tight mb-2">
-        How can I help you today?
+        {activeMode === 'cybersecurity' ? 'Darkano Cyber Intelligence AI' : 'How can I help you today?'}
       </h1>
 
-      <p className="text-sm text-slate-400 max-w-md mx-auto mb-6">
-        Frontier reasoning, systems architecture, and polyglot code synthesis.
+      <p className="text-sm text-slate-400 max-w-lg mx-auto mb-6">
+        {activeMode === 'cybersecurity'
+          ? 'Ethical hacking research, live URL security audits, vulnerability detection, network telemetry, and forensic analysis.'
+          : 'Frontier reasoning, systems architecture, and polyglot code synthesis.'}
       </p>
 
       {/* Minimal, subtle prompt pills */}

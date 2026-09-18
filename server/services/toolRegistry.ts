@@ -5,6 +5,7 @@ import { DocumentContextManager, PreparedDocumentContext } from './documentConte
 import { CreditService, CreditTransactionType } from './creditService.js';
 import { MultimodalService } from './multimodalService.js';
 import { MediaService } from './mediaService.js';
+import { SecurityAnalysisService } from './securityAnalysisService.js';
 import { AgentTaskService } from '../db/agentTaskService.js';
 import { db } from '../db/database.js';
 
@@ -712,24 +713,89 @@ ToolRegistry.registerTool({
     }
 
     const client = MultimodalService.getClient();
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [
-        {
-          inlineData: {
-            mimeType,
-            data: buffer.toString('base64')
-          }
-        },
-        {
-          text: `You are an expert multimodal visual analyst. Analyze this visual input in detail according to this instruction: ${instruction}`
+    let responseText = '';
+    const contents = [
+      {
+        inlineData: {
+          mimeType,
+          data: buffer.toString('base64')
         }
-      ]
-    });
+      },
+      {
+        text: `You are Darkano Cyber AI, an elite cybersecurity and multimodal analyst. Analyze this visual input (e.g. terminal output, network diagram, packet capture, code snippet, memory map, or system telemetry) in detail according to this instruction: ${instruction}`
+      }
+    ];
+
+    try {
+      const response = await client.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents
+      });
+      responseText = response.text ? response.text.trim() : '';
+    } catch {
+      const fallbackResponse = await client.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents
+      });
+      responseText = fallbackResponse.text ? fallbackResponse.text.trim() : '';
+    }
 
     return {
-      analysis: response.text ? response.text.trim() : 'No visual analysis produced.',
+      analysis: responseText || 'No visual analysis produced.',
       mediaId
     };
   }
 });
+
+// 8. Tool: analyze_website_security (Real URL / Web Security Probe)
+ToolRegistry.registerTool({
+  name: 'analyze_website_security',
+  description: 'Perform real live cybersecurity and infrastructure analysis on a target website URL. Audits DNS records (A, AAAA, MX, TXT, SPF, DMARC), TLS 1.3 protocol and cipher suite, HTTP response headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options), cookie attributes, server banner leaks, and calculates an authentic OWASP security score and vulnerability list.',
+  parameters: {
+    type: 'object',
+    properties: {
+      url: { type: 'string', description: 'The target website URL to analyze (e.g. https://example.com)' },
+      deepInspection: { type: 'boolean', description: 'Whether to include deep vulnerability attack surface recommendations' }
+    },
+    required: ['url']
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      targetUrl: { type: 'string' },
+      hostname: { type: 'string' },
+      score: { type: 'number' },
+      grade: { type: 'string' },
+      riskLevel: { type: 'string' },
+      summary: { type: 'string' },
+      findingsCount: { type: 'number' },
+      telemetry: { type: 'string' }
+    }
+  },
+  permissionRequirement: 'can_fetch_web_pages',
+  timeoutMs: 30000,
+  enabled: true,
+  requiresApproval: false,
+  estimatedCredits: 2,
+  creditType: 'ai_usage',
+  execute: async (args) => {
+    const rawUrl = String(args.url || '').trim();
+    if (!rawUrl) throw new Error('Target URL parameter is required.');
+
+    const analysis = await SecurityAnalysisService.analyze(rawUrl);
+    const telemetry = SecurityAnalysisService.formatTelemetryPrompt(analysis);
+
+    return {
+      targetUrl: analysis.targetUrl,
+      hostname: analysis.hostname,
+      score: analysis.score,
+      grade: analysis.grade,
+      riskLevel: analysis.riskLevel,
+      summary: analysis.summary,
+      findingsCount: analysis.findings.length,
+      telemetry,
+      rawAnalysis: analysis
+    };
+  }
+});
+

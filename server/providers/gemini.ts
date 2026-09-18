@@ -208,11 +208,15 @@ export class GeminiProvider extends BaseAIProvider {
   ): AsyncGenerator<StreamEventChunk, void, unknown> {
     const startTime = Date.now();
     const client = this.getClient();
-    const targetModel = options.model === 'gemini-2.5-pro' ? 'gemini-3.5-flash' : 'gemini-3.5-flash-lite';
+    let targetModel = 'gemini-3.5-flash';
+    if (options.model === 'gemini-3.1-flash-lite' && (!options.multimodalParts || options.multimodalParts.length === 0)) {
+      targetModel = 'gemini-3.5-flash-lite';
+    }
     const contents = this.sanitizeContents(options.history, options.message, options.multimodalParts);
 
-    // If research mode is active, enable Google Search Grounding
-    const tools = options.mode === 'research' ? [{ googleSearch: {} }] : undefined;
+    // If research mode or security research / web search is requested, enable Google Search Grounding
+    const enableSearch = options.mode === 'research' || Boolean((options as any).webSearch) || (options as any).cyberAction === 'security_research';
+    const tools = enableSearch ? [{ googleSearch: {} }] : undefined;
 
     const tryGenerate = async (modelToUse: string) => {
       return await client.models.generateContentStream({

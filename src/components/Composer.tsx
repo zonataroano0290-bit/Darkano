@@ -18,10 +18,13 @@ import {
   Palette,
   AlertTriangle,
   RefreshCw,
-  Radio
+  Radio,
+  ShieldAlert,
+  Globe
 } from 'lucide-react';
 import { useWorkspace } from '../context/WorkspaceContext';
-import { WorkspaceMode, MediaItem } from '../types';
+import { WorkspaceMode, MediaItem, CyberAction } from '../types';
+import { CyberOptionsBar } from './CyberOptionsBar';
 
 interface ComposerProps {
   isCentered?: boolean;
@@ -44,12 +47,14 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
     transcribeAudioAction,
     setImageGenModalOpen,
     setVoiceChatModalOpen,
+    setWebsiteAnalysisModalOpen,
     setActiveLightboxImage,
     isGenerating,
     stopGeneration
   } = useWorkspace();
 
   const [input, setInput] = useState('');
+  const [pendingCyberAction, setPendingCyberAction] = useState<CyberAction | undefined>(undefined);
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -77,8 +82,9 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
     if (now - lastSendTimeRef.current < 400) return;
     if ((!input.trim() && stagedComposerFiles.length === 0 && stagedMedia.length === 0) || isGenerating) return;
     lastSendTimeRef.current = now;
-    sendMessage(input, stagedComposerFiles, stagedMedia);
+    sendMessage(input, stagedComposerFiles, stagedMedia, pendingCyberAction);
     setInput('');
+    setPendingCyberAction(undefined);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -172,7 +178,8 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
     code: { label: 'Code', icon: Code2, color: 'text-emerald-400' },
     research: { label: 'Research', icon: Compass, color: 'text-purple-400' },
     analyze: { label: 'Analyze', icon: BarChart3, color: 'text-amber-400' },
-    agent: { label: 'Agent', icon: Workflow, color: 'text-cyan-400' }
+    agent: { label: 'Agent', icon: Workflow, color: 'text-cyan-400' },
+    cybersecurity: { label: 'Cyber AI', icon: ShieldAlert, color: 'text-rose-400' }
   };
 
   const hasAttachedMedia = stagedMedia.length > 0;
@@ -189,6 +196,8 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
     if (isRecordingAudio) return `Recording your voice (${recordingSeconds}s)... Speak clearly.`;
     if (isTranscribing) return 'Transcribing speech with Gemini Audio Engine...';
     switch (activeMode) {
+      case 'cybersecurity':
+        return 'Ask Cyber AI for penetration testing, vulnerability analysis, website audits, CVE intel, CTF...';
       case 'agent':
         return 'Ask Darkano to plan and autonomously execute multi-step tool tasks...';
       case 'research':
@@ -204,6 +213,25 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
 
   return (
     <div className={`w-full ${isCentered ? 'max-w-3xl mx-auto' : 'max-w-4xl mx-auto'}`}>
+      {/* Cyber Intelligence Quick Actions Bar */}
+      <CyberOptionsBar
+        onSelectAction={(action, template) => {
+          setActiveMode('cybersecurity');
+          setPendingCyberAction(action);
+          if (template) {
+            setInput(prev => (prev ? `${template}${prev}` : template));
+            if (textareaRef.current) {
+              textareaRef.current.focus();
+            }
+          }
+        }}
+        onOpenWebsiteAnalysis={() => {
+          setActiveMode('cybersecurity');
+          setWebsiteAnalysisModalOpen(true);
+        }}
+        className="mb-2 px-1"
+      />
+
       {/* Hidden File & Media Inputs */}
       <input
         type="file"
@@ -419,9 +447,24 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
               <span className="hidden md:inline text-xs font-medium">Voice Mode</span>
             </button>
 
+            {/* Live Website Security Analysis Probe Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveMode('cybersecurity');
+                setWebsiteAnalysisModalOpen(true);
+              }}
+              className="flex items-center gap-1 px-2 py-1.5 text-xs text-rose-400 hover:text-rose-200 hover:bg-rose-500/15 rounded-xl transition-all cursor-pointer border border-rose-900/30"
+              title="Audit Website URL Security (DNS, TLS, HTTP Headers & Vulnerabilities)"
+              id="composer-website-audit-btn"
+            >
+              <Globe className="w-4 h-4 text-rose-400" />
+              <span className="hidden md:inline text-xs font-medium">URL Audit</span>
+            </button>
+
             {/* Compact Mode Selector */}
             <div className="flex items-center bg-black/40 p-0.5 rounded-xl border border-white/[0.06] ml-1">
-              {(['chat', 'code', 'research', 'analyze', 'agent'] as WorkspaceMode[]).map(mode => {
+              {(['chat', 'cybersecurity', 'code', 'research', 'analyze', 'agent'] as WorkspaceMode[]).map(mode => {
                 const info = modeIcons[mode];
                 const Icon = info.icon;
                 const isSelected = activeMode === mode;

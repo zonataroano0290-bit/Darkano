@@ -19,6 +19,7 @@ import { AuthScreen } from './components/AuthScreen';
 import { ImageLightboxModal } from './components/ImageLightboxModal';
 import { ImageGenerationModal } from './components/ImageGenerationModal';
 import { VoiceChatModal } from './components/VoiceChatModal';
+import { WebsiteAnalysisModal } from './components/WebsiteAnalysisModal';
 import { Shield } from 'lucide-react';
 
 const DarkanoAppContent: React.FC = () => {
@@ -36,7 +37,9 @@ const DarkanoAppContent: React.FC = () => {
     isImageGenModalOpen,
     setImageGenModalOpen,
     isVoiceChatModalOpen,
-    setVoiceChatModalOpen
+    setVoiceChatModalOpen,
+    isWebsiteAnalysisModalOpen,
+    setWebsiteAnalysisModalOpen
   } = useWorkspace();
 
   // Loading state while restoring session from secure token
@@ -106,6 +109,10 @@ const DarkanoAppContent: React.FC = () => {
       <VoiceChatModal
         isOpen={isVoiceChatModalOpen}
         onClose={() => setVoiceChatModalOpen(false)}
+      />
+      <WebsiteAnalysisModal
+        isOpen={isWebsiteAnalysisModalOpen}
+        onClose={() => setWebsiteAnalysisModalOpen(false)}
       />
     </div>
   );

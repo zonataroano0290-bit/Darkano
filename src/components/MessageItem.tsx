@@ -17,12 +17,14 @@ import {
   ExternalLink,
   Volume2,
   RefreshCw,
-  Image as ImageIcon
+  Image as ImageIcon,
+  ShieldAlert
 } from 'lucide-react';
 import { ChatMessage, WorkspaceMode, MediaItem } from '../types';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { AgentTaskCard } from './AgentTaskCard';
 import { AudioPlayerInline } from './AudioPlayerInline';
+import { SecurityAuditCard } from './SecurityAuditCard';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -191,6 +193,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
         return { label: 'Research', icon: Compass, color: 'text-purple-400 border-purple-500/30 bg-purple-500/10' };
       case 'analyze':
         return { label: 'Analyze', icon: BarChart3, color: 'text-amber-400 border-amber-500/30 bg-amber-500/10' };
+      case 'cybersecurity':
+        return { label: 'Cyber AI', icon: ShieldAlert, color: 'text-rose-400 border-rose-500/40 bg-rose-500/15 shadow-[0_0_10px_rgba(225,29,72,0.2)]' };
       default:
         return { label: 'Chat', icon: Sparkles, color: 'text-rose-400 border-rose-500/30 bg-rose-500/10' };
     }
@@ -359,6 +363,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
               <Compass className="w-3.5 h-3.5 text-rose-400 animate-spin" />
               <span>{message.currentStage}</span>
             </div>
+          )}
+
+          {/* Real Live Cyber Security Audit Telemetry Card */}
+          {message.securityAudit && (
+            <SecurityAuditCard audit={message.securityAudit} />
           )}
 
           {/* Citations Tag Chips */}
