@@ -121,13 +121,13 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-[#090d14]">
       {/* Action Bar */}
-      <div className="flex items-center justify-between px-3 py-2 bg-[#121822] border-b border-slate-800 shrink-0">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between px-2.5 py-1.5 bg-[#121822] border-b border-slate-800 shrink-0 gap-2 overflow-x-auto select-none">
+        <div className="flex items-center gap-1.5 shrink-0">
           {/* Start/Build Button */}
           <button
             onClick={handleStartPreview}
             disabled={isBuilding || isActionLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded text-xs font-semibold shadow-sm transition-all cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded text-xs font-semibold shadow-sm transition-all cursor-pointer min-h-[36px]"
             title="Compile project and refresh live sandbox"
           >
             {isBuilding || isActionLoading ? (
@@ -143,7 +143,7 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
             <button
               onClick={handleStopPreview}
               disabled={isActionLoading}
-              className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 rounded text-xs transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 rounded text-xs transition-colors cursor-pointer min-h-[36px]"
               title="Stop preview sandbox runtime"
             >
               <Square className="w-3 h-3" />
@@ -156,62 +156,62 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
             {previewStatus === 'Running' && (
               <span className="flex items-center gap-1 text-emerald-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span>Running</span>
+                <span className="hidden xs:inline">Running</span>
               </span>
             )}
             {previewStatus === 'Stopped' && (
               <span className="flex items-center gap-1 text-slate-500">
                 <Square className="w-2.5 h-2.5" />
-                <span>Stopped</span>
+                <span className="hidden xs:inline">Stopped</span>
               </span>
             )}
             {previewStatus === 'Unavailable' && (
               <span className="flex items-center gap-1 text-amber-400">
                 <AlertTriangle className="w-3 h-3" />
-                <span>Unavailable</span>
+                <span className="hidden xs:inline">Unavailable</span>
               </span>
             )}
           </div>
         </div>
 
         {/* View Controls */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           <div className="flex items-center bg-slate-900 border border-slate-800 rounded p-0.5 text-xs">
             <button
               onClick={() => setViewMode('preview')}
-              className={`flex items-center gap-1 px-2 py-1 rounded font-medium transition-colors ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded font-medium transition-colors min-h-[32px] ${
                 viewMode === 'preview'
                   ? 'bg-rose-950/80 text-rose-200 border border-rose-600/40'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <Eye className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Preview</span>
+              <span>Preview</span>
             </button>
             <button
               onClick={() => setViewMode('logs')}
-              className={`flex items-center gap-1 px-2 py-1 rounded font-medium transition-colors ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded font-medium transition-colors min-h-[32px] ${
                 viewMode === 'logs'
                   ? 'bg-rose-950/80 text-rose-200 border border-rose-600/40'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <Terminal className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Console</span>
+              <span>Logs</span>
             </button>
           </div>
 
           <button
             onClick={handleReloadPreview}
             disabled={isActionLoading}
-            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+            className="p-2 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors min-w-[36px] min-h-[36px] flex items-center justify-center"
             title="Reload Preview"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isActionLoading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={handleOpenExternal}
-            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+            className="p-2 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors min-w-[36px] min-h-[36px] flex items-center justify-center"
             title="Open in new tab"
           >
             <ExternalLink className="w-3.5 h-3.5" />
@@ -221,7 +221,7 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
 
       {/* Build Failure Banner & Fix With AI */}
       {hasFailed && (
-        <div className="p-3 bg-rose-950/40 border-b border-rose-900/60 flex items-center justify-between gap-3 shrink-0">
+        <div className="p-3 bg-rose-950/40 border-b border-rose-900/60 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0">
           <div className="flex items-center gap-2 min-w-0 text-xs">
             <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
             <div className="min-w-0">
@@ -235,7 +235,7 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
           <button
             onClick={onFixBuildError}
             disabled={isFixing}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 text-white rounded text-xs font-semibold shadow-sm shrink-0 transition-colors cursor-pointer"
+            className="flex items-center justify-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 text-white rounded text-xs font-semibold shadow-sm shrink-0 transition-colors cursor-pointer min-h-[40px]"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>{isFixing ? 'Analyzing...' : 'Fix with AI'}</span>

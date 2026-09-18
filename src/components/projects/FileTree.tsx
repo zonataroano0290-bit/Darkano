@@ -10,7 +10,8 @@ import {
   Search,
   ChevronRight,
   ChevronDown,
-  RefreshCw
+  RefreshCw,
+  X
 } from 'lucide-react';
 import { ProjectFileRecord } from '../../types';
 
@@ -24,6 +25,8 @@ interface FileTreeProps {
   onDeleteItem: (path: string, isFolder: boolean) => Promise<void>;
   onRefresh: () => void;
   isLoading: boolean;
+  className?: string;
+  onCloseDrawer?: () => void;
 }
 
 interface TreeNode {
@@ -43,7 +46,9 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onRenameItem,
   onDeleteItem,
   onRefresh,
-  isLoading
+  isLoading,
+  className,
+  onCloseDrawer
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['src', 'public']));
@@ -240,7 +245,14 @@ export const FileTree: React.FC<FileTreeProps> = ({
           return (
             <div
               key={item.path}
-              onClick={() => item.fileRecord && onSelectFile(item.fileRecord)}
+              onClick={() => {
+                if (item.fileRecord) {
+                  onSelectFile(item.fileRecord);
+                  if (onCloseDrawer) {
+                    onCloseDrawer();
+                  }
+                }
+              }}
               style={{ paddingLeft: `${depth * 14 + 24}px` }}
               className={`group flex items-center justify-between py-1.5 pr-2 rounded-md cursor-pointer text-xs font-mono transition-colors ${
                 isFileActive
@@ -290,36 +302,47 @@ export const FileTree: React.FC<FileTreeProps> = ({
   };
 
   return (
-    <div className="w-64 flex flex-col min-h-0 bg-[#0c1017] border-r border-slate-800/80 select-none">
+    <div className={className || "w-64 flex flex-col min-h-0 bg-[#0c1017] border-r border-slate-800/80 select-none"}>
       {/* File Tree Header */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-800/80 bg-[#121822]">
-        <span className="text-[11px] font-mono uppercase tracking-wider font-semibold text-slate-400">
-          Explorer
-        </span>
+      <div className={`flex items-center justify-between px-3 py-2.5 border-b border-slate-800/80 bg-[#121822] ${onCloseDrawer ? 'pt-[max(env(safe-area-inset-top),10px)]' : ''}`}>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-mono uppercase tracking-wider font-semibold text-slate-300">
+            Explorer
+          </span>
+        </div>
         <div className="flex items-center gap-1">
           <button
             onClick={handleStartCreateFile}
-            className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors"
+            className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
             title="New File"
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={handleStartCreateFolder}
-            className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors"
+            className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
             title="New Folder"
           >
             <FolderPlus className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={onRefresh}
-            className={`p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors ${
+            className={`p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center ${
               isLoading ? 'animate-spin' : ''
             }`}
             title="Refresh Files"
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
+          {onCloseDrawer && (
+            <button
+              onClick={onCloseDrawer}
+              className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-rose-400 transition-colors ml-1 min-w-[32px] min-h-[32px] flex items-center justify-center"
+              title="Close File Drawer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -385,7 +408,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
       </div>
 
       {/* File Tree Footer Count */}
-      <div className="px-3 py-1.5 border-t border-slate-800/80 bg-[#121822] text-[10px] font-mono text-slate-500">
+      <div className={`px-3 py-1.5 border-t border-slate-800/80 bg-[#121822] text-[10px] font-mono text-slate-500 ${onCloseDrawer ? 'pb-[max(env(safe-area-inset-bottom),8px)]' : ''}`}>
         {files.filter(f => f.fileType === 'file').length} files · {files.filter(f => f.fileType === 'directory').length} folders
       </div>
     </div>

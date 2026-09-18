@@ -4,16 +4,13 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
   // Prevent MIME type sniffing
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
-  // Protect against clickjacking while allowing same-origin iframes (e.g. project previews)
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-
   // Strict referrer policy for privacy
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 
   // Disable buggy legacy XSS auditor in modern browsers
   res.setHeader('X-XSS-Protection', '0');
 
-  // Content security policy: allow safe local assets, fonts, icons, esm modules, and images
+  // Content security policy: allow safe local assets, fonts, icons, esm modules, images, and AI Studio preview framing
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; " +
@@ -23,7 +20,8 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
     "img-src 'self' data: blob: https:; " +
     "connect-src 'self' ws: wss: https:; " +
     "media-src 'self' blob: data:; " +
-    "frame-src 'self' blob:;"
+    "frame-src 'self' blob:; " +
+    "frame-ancestors 'self' https://ai.studio https://*.google.com https://*.run.app;"
   );
 
   // Cross-Origin Resource Sharing (CORS) defaults

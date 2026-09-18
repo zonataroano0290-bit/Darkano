@@ -138,7 +138,7 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
                 key={act.id}
                 type="button"
                 onClick={() => setActionType(act.id)}
-                className={`flex items-center gap-2 p-2 rounded text-left transition-all border text-xs ${
+                className={`flex items-center gap-2 p-2.5 rounded-lg text-left transition-all border text-xs min-h-[42px] ${
                   isSelected
                     ? 'bg-rose-950/50 border-rose-500/80 text-rose-100 font-medium'
                     : 'bg-slate-900/40 border-slate-800/80 text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
@@ -180,7 +180,7 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800/60 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700/50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800/60 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700/50 transition-colors min-h-[40px]"
               title="Upload UI screenshot, wireframe, or error image"
             >
               <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
@@ -190,7 +190,7 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedImage(null)}
-                className="text-xs text-rose-400 hover:underline"
+                className="text-xs text-rose-400 hover:underline min-h-[40px] px-1 flex items-center"
               >
                 Remove
               </button>
@@ -200,7 +200,7 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
           <button
             type="submit"
             disabled={!instruction.trim() || isLoading}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded text-xs font-semibold shadow-sm transition-all cursor-pointer"
+            className="flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-all cursor-pointer min-h-[40px]"
           >
             {isLoading ? (
               <>

@@ -108,10 +108,11 @@ export class CollaborationService {
         pm.createdAt,
         pm.updatedAt,
         u.email as userEmail,
-        u.displayName as userDisplayName,
-        u.avatarUrl as userAvatarUrl
+        p.displayName as userDisplayName,
+        p.avatarUrl as userAvatarUrl
       FROM project_members pm
       JOIN users u ON pm.userId = u.id
+      LEFT JOIN profiles p ON u.id = p.userId
       WHERE pm.projectId = ? AND pm.status = 'active'
       ORDER BY 
         CASE pm.role 
@@ -125,7 +126,12 @@ export class CollaborationService {
     // Ensure owner is included in listing if not yet in project_members
     const hasOwner = members.some(m => m.userId === project.userId);
     if (!hasOwner) {
-      const ownerUser = db.prepare(`SELECT id, email, displayName, avatarUrl FROM users WHERE id = ?`).get(project.userId) as any;
+      const ownerUser = db.prepare(`
+        SELECT u.id, u.email, p.displayName, p.avatarUrl 
+        FROM users u 
+        LEFT JOIN profiles p ON u.id = p.userId 
+        WHERE u.id = ?
+      `).get(project.userId) as any;
       if (ownerUser) {
         members.unshift({
           id: `mem_owner_${project.userId}`,
@@ -137,8 +143,8 @@ export class CollaborationService {
           createdAt: project.createdAt,
           updatedAt: project.createdAt,
           userEmail: ownerUser.email,
-          userDisplayName: ownerUser.displayName,
-          userAvatarUrl: ownerUser.avatarUrl
+          userDisplayName: ownerUser.displayName || ownerUser.email?.split('@')[0],
+          userAvatarUrl: ownerUser.avatarUrl || null
         });
       }
     }
@@ -294,16 +300,17 @@ export class CollaborationService {
       SELECT 
         pi.*,
         u.email as inviterEmail,
-        u.displayName as inviterDisplayName
+        p.displayName as inviterDisplayName
       FROM project_invitations pi
       JOIN users u ON pi.inviterId = u.id
+      LEFT JOIN profiles p ON u.id = p.userId
       WHERE pi.projectId = ?
       ORDER BY pi.createdAt DESC
     `).all(projectId) as unknown as ProjectInvitationRecord[];
   }
 
-  static listUserInvitations(userEmail: string, userId?: string): ProjectInvitationRecord[] {
-    const cleanEmail = userEmail.trim().toLowerCase();
+  static listUserInvitations(userEmail?: string, userId?: string): ProjectInvitationRecord[] {
+    const cleanEmail = (userEmail || '').trim().toLowerCase();
     const now = new Date().toISOString();
 
     return db.prepare(`
@@ -311,11 +318,12 @@ export class CollaborationService {
         pi.*,
         p.name as projectName,
         u.email as inviterEmail,
-        u.displayName as inviterDisplayName
+        prof.displayName as inviterDisplayName
       FROM project_invitations pi
       JOIN projects p ON pi.projectId = p.id
       JOIN users u ON pi.inviterId = u.id
-      WHERE (pi.inviteeEmail = ? OR pi.inviteeUserId = ?)
+      LEFT JOIN profiles prof ON u.id = prof.userId
+      WHERE (pi.inviteeEmail = ? OR (pi.inviteeUserId IS NOT NULL AND pi.inviteeUserId = ?))
         AND pi.status = 'pending'
         AND pi.expiresAt > ?
       ORDER BY pi.createdAt DESC
@@ -528,7 +536,12 @@ export class CollaborationService {
       hasLines: lineStart !== null
     });
 
-    const user = db.prepare(`SELECT displayName, email, avatarUrl FROM users WHERE id = ?`).get(userId) as any;
+    const user = db.prepare(`
+      SELECT u.email, p.displayName, p.avatarUrl 
+      FROM users u 
+      LEFT JOIN profiles p ON u.id = p.userId 
+      WHERE u.id = ?
+    `).get(userId) as any;
 
     return {
       id: commentId,
@@ -542,9 +555,9 @@ export class CollaborationService {
       parentId,
       createdAt: now,
       updatedAt: now,
-      userDisplayName: user?.displayName,
+      userDisplayName: user?.displayName || user?.email?.split('@')[0] || 'User',
       userEmail: user?.email,
-      userAvatarUrl: user?.avatarUrl
+      userAvatarUrl: user?.avatarUrl || null
     };
   }
 
@@ -552,11 +565,12 @@ export class CollaborationService {
     let query = `
       SELECT 
         c.*,
-        u.displayName as userDisplayName,
+        p.displayName as userDisplayName,
         u.email as userEmail,
-        u.avatarUrl as userAvatarUrl
+        p.avatarUrl as userAvatarUrl
       FROM project_comments c
       JOIN users u ON c.userId = u.id
+      LEFT JOIN profiles p ON u.id = p.userId
       WHERE c.projectId = ?
     `;
     const params: any[] = [projectId];
@@ -740,9 +754,10 @@ export class CollaborationService {
       SELECT 
         pa.*,
         u.email as actorEmail,
-        u.displayName as actorDisplayName
+        p.displayName as actorDisplayName
       FROM project_activity pa
       JOIN users u ON pa.actorUserId = u.id
+      LEFT JOIN profiles p ON u.id = p.userId
       WHERE pa.projectId = ?
       ORDER BY pa.createdAt DESC
       LIMIT ?

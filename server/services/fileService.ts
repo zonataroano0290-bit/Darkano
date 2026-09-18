@@ -2,9 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import multer from 'multer';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse');
+import * as pdfParseModule from 'pdf-parse';
+const pdfParse: any = (pdfParseModule as any).default || pdfParseModule;
 import * as mammoth from 'mammoth';
 import * as xlsx from 'xlsx';
 import { db } from '../db/database.js';
@@ -207,9 +206,21 @@ export class FileService {
 
       switch (ext) {
         case 'pdf': {
-          const pdfData = await (pdfParse as any)(buffer);
-          metadata.pageCount = pdfData.numpages || 1;
-          extractedText = pdfData.text || '';
+          let numpages = 1;
+          if (typeof pdfParse === 'function') {
+            const pdfData = await (pdfParse as any)(buffer);
+            numpages = pdfData.numpages || 1;
+            extractedText = pdfData.text || '';
+          } else if (pdfParse?.PDFParse) {
+            const parser = new (pdfParse as any).PDFParse({ data: buffer });
+            await parser.load();
+            const textRes = await parser.getText();
+            extractedText = typeof textRes === 'string' ? textRes : (textRes?.text || '');
+            const info = await parser.getInfo();
+            numpages = info?.pages || parser.doc?.numPages || 1;
+            await parser.destroy();
+          }
+          metadata.pageCount = numpages;
           metadata.previewSnippet = extractedText.slice(0, 3000);
           break;
         }

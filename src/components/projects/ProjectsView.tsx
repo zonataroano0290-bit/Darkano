@@ -23,7 +23,10 @@ import {
   Github,
   MessageSquare,
   Lock,
-  Shield
+  Shield,
+  MoreHorizontal,
+  Save,
+  X
 } from 'lucide-react';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import {
@@ -78,6 +81,9 @@ export const ProjectsView: React.FC = () => {
 
   // UI Tabs & Modals
   const [rightTab, setRightTab] = useState<'preview' | 'deployments' | 'ai' | 'patches' | 'checks' | 'comments'>('preview');
+  const [mobileTab, setMobileTab] = useState<'code' | 'preview' | 'ai' | 'patches' | 'deployments' | 'checks' | 'comments'>('code');
+  const [isMobileFilesOpen, setIsMobileFilesOpen] = useState(false);
+  const [isMobileMoreOpen, setIsMobileMoreOpen] = useState(false);
   const [isSnapshotsModalOpen, setIsSnapshotsModalOpen] = useState(false);
   const [isEnvVarsModalOpen, setIsEnvVarsModalOpen] = useState(false);
   const [isScopedEnvModalOpen, setIsScopedEnvModalOpen] = useState(false);
@@ -215,6 +221,8 @@ export const ProjectsView: React.FC = () => {
     }
     setActiveFile(file);
     setFileContent(file.content);
+    setIsMobileFilesOpen(false);
+    setMobileTab('code');
   };
 
   // File content change in CodeMirror
@@ -614,9 +622,9 @@ export const ProjectsView: React.FC = () => {
 
   // Active Project Workspace View
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#080c14] overflow-hidden select-none">
-      {/* Top Workspace Header Bar */}
-      <div className="flex items-center justify-between px-3 py-2 bg-[#0e1420] border-b border-slate-800 shrink-0">
+    <div className="flex-1 flex flex-col min-h-0 w-full max-w-full bg-[#080c14] overflow-hidden select-none">
+      {/* Desktop Top Workspace Header Bar (visible on lg+) */}
+      <div className="hidden lg:flex items-center justify-between px-3 py-2 bg-[#0e1420] border-b border-slate-800 shrink-0">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setSelectedProjectId(null)}
@@ -652,7 +660,7 @@ export const ProjectsView: React.FC = () => {
           </div>
         </div>
 
-        {/* Global Action Buttons */}
+        {/* Global Action Buttons (Desktop) */}
         <div className="flex items-center gap-2">
           {/* Team & Collaboration */}
           <button
@@ -743,14 +751,314 @@ export const ProjectsView: React.FC = () => {
             disabled={isBuilding}
             className="flex items-center gap-1.5 px-3 py-1 rounded bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
           >
-            <Play className="w-3 h-3 fill-current" />
+            <Play className={`w-3 h-3 fill-current ${isBuilding ? 'animate-spin' : ''}`} />
             <span>{isBuilding ? 'Building...' : 'Build'}</span>
           </button>
         </div>
       </div>
 
-      {/* Main Workspace Split: Left (FileTree), Center (Editor), Right (Tabs: Preview, AI, Patches, Checks) */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+      {/* Mobile Top Workspace Header Bar (visible on < lg) */}
+      <div className="flex lg:hidden items-center justify-between px-3 py-2 bg-[#0e1420] border-b border-slate-800 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={() => setSelectedProjectId(null)}
+            className="p-1.5 -ml-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-100 transition-colors flex items-center justify-center min-w-[36px] min-h-[36px]"
+            title="Return to Projects List"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+
+          <div className="flex flex-col min-w-0">
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-xs font-semibold text-slate-100 truncate max-w-[130px] sm:max-w-[200px]">
+                {activeProject.name}
+              </h2>
+              {activeProject.currentUserRole && (
+                <span className="text-[9px] font-semibold px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 uppercase">
+                  {activeProject.currentUserRole}
+                </span>
+              )}
+            </div>
+            <span className="text-[10px] font-mono text-rose-400/90 truncate uppercase">
+              {activeProject.framework} {activeProject.language ? `· ${activeProject.language}` : ''}
+            </span>
+          </div>
+        </div>
+
+        {/* Essential Action Buttons on Mobile */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Quick Files button on mobile */}
+          <button
+            onClick={() => setIsMobileFilesOpen(true)}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 text-xs font-medium min-h-[36px] transition-colors"
+            title="Open File Explorer"
+          >
+            <FolderTree className="w-3.5 h-3.5 text-rose-400" />
+            <span className="text-[11px] font-mono">Files</span>
+          </button>
+
+          {/* Save button (shown if unsaved file exists) */}
+          {activeFile && unsavedFiles.has(activeFile.path) && (
+            <button
+              onClick={() => handleSaveFile()}
+              disabled={isSavingFile}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold min-h-[36px] shadow-sm shadow-rose-950 transition-colors cursor-pointer"
+              title="Save File (Cmd/Ctrl+S)"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span className="text-[11px]">{isSavingFile ? '...' : 'Save'}</span>
+            </button>
+          )}
+
+          {/* Build Button */}
+          <button
+            onClick={handleRunBuild}
+            disabled={isBuilding}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer min-h-[36px]"
+            title="Run Project Build"
+          >
+            <Play className={`w-3 h-3 fill-current ${isBuilding ? 'animate-spin' : ''}`} />
+            <span>{isBuilding ? 'Building' : 'Build'}</span>
+          </button>
+
+          {/* More Actions (⋯) */}
+          <button
+            onClick={() => setIsMobileMoreOpen(true)}
+            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition-colors flex items-center justify-center min-w-[36px] min-h-[36px]"
+            title="More Actions"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* MOBILE WORKSPACE PANEL (visible on < lg: single-panel layout) */}
+      <div className="flex lg:hidden flex-1 flex-col min-h-0 min-w-0 w-full overflow-hidden relative">
+        {/* Panel 1: CODE Editor */}
+        {mobileTab === 'code' && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden">
+            <EditorPanel
+              activeFile={activeFile}
+              openFiles={openFiles}
+              unsavedFiles={unsavedFiles}
+              fileContent={fileContent}
+              onContentChange={handleContentChange}
+              onSaveFile={handleSaveFile}
+              onSelectFile={handleSelectFile}
+              onCloseFile={handleCloseFile}
+              isSaving={isSavingFile}
+              readOnly={activeProject.currentUserRole === 'viewer'}
+              onOpenFilesDrawer={() => setIsMobileFilesOpen(true)}
+            />
+          </div>
+        )}
+
+        {/* Panel 2: PREVIEW */}
+        {mobileTab === 'preview' && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden bg-[#0c1017]">
+            <PreviewPanel
+              projectId={selectedProjectId}
+              latestBuild={latestBuild}
+              onRunBuild={handleRunBuild}
+              onFixBuildError={handleFixBuildError}
+              isBuilding={isBuilding}
+              isFixing={isFixingBuild}
+              authToken={token || ''}
+            />
+          </div>
+        )}
+
+        {/* Panel 3: AI Assistant */}
+        {mobileTab === 'ai' && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-y-auto bg-[#0c1017]">
+            <AiAssistantPanel
+              activeFile={activeFile}
+              onAiEdit={handleAiEdit}
+              onGenerateTests={handleGenerateTests}
+              onViewPatch={() => {
+                setRightTab('patches');
+                setMobileTab('patches');
+              }}
+              isLoading={isAiExecuting}
+            />
+          </div>
+        )}
+
+        {/* Panel 4: CHANGES / Patches */}
+        {mobileTab === 'patches' && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-y-auto bg-[#0c1017]">
+            <PatchesPanel
+              patches={patches}
+              onApplyPatch={handleApplyPatch}
+              onRejectPatch={handleRejectPatch}
+              isLoading={isSavingFile}
+            />
+          </div>
+        )}
+
+        {/* Panel 5: Secondary - Deployments */}
+        {mobileTab === 'deployments' && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden bg-[#0c1017]">
+            <div className="flex items-center justify-between px-3 py-2 bg-[#121822] border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-1.5">
+                <Rocket className="w-3.5 h-3.5 text-rose-400" />
+                <span className="text-xs font-semibold text-slate-200">Cloud Deployments</span>
+              </div>
+              <button
+                onClick={() => setMobileTab('code')}
+                className="text-xs font-medium text-slate-300 hover:text-white px-2.5 py-1 bg-slate-800 hover:bg-slate-700 rounded transition-colors"
+              >
+                Back to Code
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <DeploymentsPanel
+                projectId={selectedProjectId}
+                projectName={activeProject.name}
+                apiFetch={apiFetch}
+                creditBalance={currentUser?.creditBalance ?? 50}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Panel 6: Secondary - Checks */}
+        {mobileTab === 'checks' && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden bg-[#0c1017]">
+            <div className="flex items-center justify-between px-3 py-2 bg-[#121822] border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-1.5">
+                <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-xs font-semibold text-slate-200">Quality & Diagnostics Checks</span>
+              </div>
+              <button
+                onClick={() => setMobileTab('code')}
+                className="text-xs font-medium text-slate-300 hover:text-white px-2.5 py-1 bg-slate-800 hover:bg-slate-700 rounded transition-colors"
+              >
+                Back to Code
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <ChecksPanel
+                checks={qualityChecks}
+                onRunChecks={handleRunChecks}
+                isLoading={isRunningChecks}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Panel 7: Secondary - Discussions */}
+        {mobileTab === 'comments' && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden bg-[#0c1017]">
+            <div className="flex items-center justify-between px-3 py-2 bg-[#121822] border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5 text-purple-400" />
+                <span className="text-xs font-semibold text-slate-200">Project Discussions</span>
+              </div>
+              <button
+                onClick={() => setMobileTab('code')}
+                className="text-xs font-medium text-slate-300 hover:text-white px-2.5 py-1 bg-slate-800 hover:bg-slate-700 rounded transition-colors"
+              >
+                Back to Code
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <CommentsPanel
+                project={activeProject}
+                activeFile={activeFile}
+                token={token}
+                currentUserId={currentUser?.id || ''}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* MOBILE BOTTOM NAVIGATION SYSTEM (visible on < lg) */}
+      <nav className="flex lg:hidden items-center justify-around bg-[#0c1017]/95 backdrop-blur-md border-t border-slate-800 shrink-0 px-1 py-1 select-none z-30 pb-[max(env(safe-area-inset-bottom),8px)]">
+        {/* FILES tab (opens file drawer) */}
+        <button
+          onClick={() => setIsMobileFilesOpen(true)}
+          className="flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg text-slate-400 hover:text-slate-200 transition-colors flex-1 min-h-[44px]"
+          title="Open File Explorer"
+        >
+          <div className="relative">
+            <FolderTree className="w-4 h-4 text-slate-300" />
+            <span className="absolute -top-1 -right-2.5 px-1 text-[8px] font-mono bg-slate-800 rounded-full text-slate-300">
+              {files.filter(f => f.fileType === 'file').length}
+            </span>
+          </div>
+          <span className="text-[10px] font-medium tracking-wide">FILES</span>
+        </button>
+
+        {/* CODE tab */}
+        <button
+          onClick={() => setMobileTab('code')}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg transition-colors flex-1 min-h-[44px] ${
+            mobileTab === 'code' ? 'text-rose-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+          title="Open Code Editor"
+        >
+          <div className="relative">
+            <Code2 className="w-4 h-4" />
+            {activeFile && unsavedFiles.has(activeFile.path) && (
+              <span className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            )}
+          </div>
+          <span className="text-[10px] font-medium tracking-wide">CODE</span>
+        </button>
+
+        {/* PREVIEW tab */}
+        <button
+          onClick={() => setMobileTab('preview')}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg transition-colors flex-1 min-h-[44px] ${
+            mobileTab === 'preview' ? 'text-rose-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+          title="Open Live Preview"
+        >
+          <div className="relative">
+            <Eye className="w-4 h-4" />
+            {latestBuild?.status === 'success' && (
+              <span className="absolute -top-0.5 -right-1 w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            )}
+          </div>
+          <span className="text-[10px] font-medium tracking-wide">PREVIEW</span>
+        </button>
+
+        {/* AI tab */}
+        <button
+          onClick={() => setMobileTab('ai')}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg transition-colors flex-1 min-h-[44px] ${
+            mobileTab === 'ai' ? 'text-rose-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+          title="Open AI Coding Assistant"
+        >
+          <Sparkles className="w-4 h-4" />
+          <span className="text-[10px] font-medium tracking-wide">AI</span>
+        </button>
+
+        {/* CHANGES tab */}
+        <button
+          onClick={() => setMobileTab('patches')}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg transition-colors flex-1 min-h-[44px] ${
+            mobileTab === 'patches' ? 'text-rose-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+          title="Open Code Proposals & Patches"
+        >
+          <div className="relative">
+            <FileDiff className="w-4 h-4" />
+            {patches.length > 0 && (
+              <span className="absolute -top-1 -right-2.5 px-1 text-[9px] font-mono bg-rose-600 text-white rounded-full">
+                {patches.length}
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] font-medium tracking-wide">CHANGES</span>
+        </button>
+      </nav>
+
+      {/* DESKTOP WORKSPACE SPLIT (visible on lg+: 3-column layout) */}
+      <div className="hidden lg:flex flex-1 min-h-0 overflow-hidden">
         {/* Left: Project Explorer */}
         <FileTree
           files={files}
@@ -864,7 +1172,7 @@ export const ProjectsView: React.FC = () => {
             </div>
           </div>
 
-          {/* Panel Content */}
+          {/* Panel Content (Desktop) */}
           <div className="flex-1 flex min-h-0 overflow-hidden">
             {rightTab === 'preview' && (
               <PreviewPanel
@@ -925,6 +1233,202 @@ export const ProjectsView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Mobile File Explorer Drawer */}
+      {isMobileFilesOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
+          {/* Backdrop */}
+          <div
+            onClick={() => setIsMobileFilesOpen(false)}
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity"
+          />
+
+          {/* Slide-over Drawer Panel */}
+          <div className="relative w-[85%] max-w-[340px] h-full bg-[#0c1017] shadow-2xl flex flex-col border-r border-slate-800 z-10 animate-in slide-in-from-left duration-200">
+            <FileTree
+              files={files}
+              activeFile={activeFile}
+              onSelectFile={(file) => {
+                handleSelectFile(file);
+                setIsMobileFilesOpen(false);
+                setMobileTab('code');
+              }}
+              onCreateFile={handleCreateFile}
+              onCreateFolder={handleCreateFolder}
+              onRenameItem={handleRenameItem}
+              onDeleteItem={handleDeleteItem}
+              onRefresh={() => loadProjectDetails(selectedProjectId)}
+              isLoading={isLoadingFiles}
+              className="w-full h-full flex flex-col min-h-0 select-none bg-[#0c1017]"
+              onCloseDrawer={() => setIsMobileFilesOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Mobile More Actions Sheet */}
+      {isMobileMoreOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          {/* Backdrop */}
+          <div
+            onClick={() => setIsMobileMoreOpen(false)}
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity"
+          />
+
+          {/* Sheet Container */}
+          <div className="relative w-full sm:max-w-md bg-[#0e1420] border-t sm:border border-slate-800 rounded-t-2xl sm:rounded-2xl p-4 shadow-2xl flex flex-col gap-3 max-h-[85vh] overflow-y-auto z-10 pb-[max(env(safe-area-inset-bottom),16px)]">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-100">Project Options</span>
+                <span className="text-[10px] font-mono text-rose-400">({activeProject.name})</span>
+              </div>
+              <button
+                onClick={() => setIsMobileMoreOpen(false)}
+                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {/* Team & Collaboration */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  setIsCollaborationModalOpen(true);
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 text-left min-h-[44px]"
+              >
+                <Users className="w-4 h-4 text-purple-400 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium truncate">Team</span>
+                  <span className="text-[10px] text-slate-500">{activeProject.membersCount || 1} members</span>
+                </div>
+              </button>
+
+              {/* Git Integration */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  setIsGitModalOpen(true);
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 text-left min-h-[44px]"
+              >
+                <Github className="w-4 h-4 text-slate-300 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium truncate">Git Remote</span>
+                  <span className="text-[10px] text-slate-500">Commits & Sync</span>
+                </div>
+              </button>
+
+              {/* Snapshots */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  loadSnapshots();
+                  setIsSnapshotsModalOpen(true);
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 text-left min-h-[44px]"
+              >
+                <History className="w-4 h-4 text-rose-400 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium truncate">Snapshots</span>
+                  <span className="text-[10px] text-slate-500">Version rollback</span>
+                </div>
+              </button>
+
+              {/* Env Vars */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  loadEnvVars();
+                  setIsEnvVarsModalOpen(true);
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 text-left min-h-[44px]"
+              >
+                <Key className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium truncate">Env Vars</span>
+                  <span className="text-[10px] text-slate-500">Project config</span>
+                </div>
+              </button>
+
+              {/* Scoped Env */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  setIsScopedEnvModalOpen(true);
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 text-left min-h-[44px]"
+              >
+                <Key className="w-4 h-4 text-rose-400 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium truncate">Scoped Env</span>
+                  <span className="text-[10px] text-slate-500">Prod/Preview</span>
+                </div>
+              </button>
+
+              {/* Deployments */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  setMobileTab('deployments');
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 text-left min-h-[44px]"
+              >
+                <Rocket className="w-4 h-4 text-rose-400 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium truncate">Deployments</span>
+                  <span className="text-[10px] text-slate-500">Cloud providers</span>
+                </div>
+              </button>
+
+              {/* Checks */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  setMobileTab('checks');
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 text-left min-h-[44px]"
+              >
+                <Activity className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium truncate">Quality Checks</span>
+                  <span className="text-[10px] text-slate-500">Diagnostics</span>
+                </div>
+              </button>
+
+              {/* Comments */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  setMobileTab('comments');
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 text-left min-h-[44px]"
+              >
+                <MessageSquare className="w-4 h-4 text-purple-400 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium truncate">Discussions</span>
+                  <span className="text-[10px] text-slate-500">Comments</span>
+                </div>
+              </button>
+
+              {/* Export ZIP */}
+              <button
+                onClick={() => {
+                  setIsMobileMoreOpen(false);
+                  handleExportProject(activeProject.id, activeProject.name);
+                }}
+                className="col-span-2 flex items-center justify-center gap-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 min-h-[44px] transition-colors"
+              >
+                <Download className="w-4 h-4 text-rose-400" />
+                <span className="font-medium">Export Project (.ZIP archive)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Snapshots Modal */}
       <SnapshotsModal

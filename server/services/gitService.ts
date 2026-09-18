@@ -376,8 +376,13 @@ export class GitService {
     const treeData = await treeRes.json();
 
     // 4. Create commit
-    const user = db.prepare(`SELECT displayName, email FROM users WHERE id = ?`).get(userId) as any;
-    const authorName = user?.displayName || 'Darkano Collaborator';
+    const user = db.prepare(`
+      SELECT u.email, p.displayName 
+      FROM users u 
+      LEFT JOIN profiles p ON u.id = p.userId 
+      WHERE u.id = ?
+    `).get(userId) as any;
+    const authorName = user?.displayName || user?.email?.split('@')[0] || 'Darkano Collaborator';
     const authorEmail = user?.email || 'collaborator@darkano.ai';
 
     const commitRes = await fetch(`https://api.github.com/repos/${slug.owner}/${slug.repo}/git/commits`, {

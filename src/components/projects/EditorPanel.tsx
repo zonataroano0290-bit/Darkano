@@ -6,7 +6,7 @@ import { css } from '@codemirror/lang-css';
 import { json } from '@codemirror/lang-json';
 import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
-import { Save, X, FileCode, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Save, X, FileCode, CheckCircle2, AlertCircle, FolderTree } from 'lucide-react';
 import { ProjectFileRecord } from '../../types';
 
 interface EditorPanelProps {
@@ -20,6 +20,7 @@ interface EditorPanelProps {
   onCloseFile: (path: string, e: React.MouseEvent) => void;
   isSaving: boolean;
   readOnly?: boolean;
+  onOpenFilesDrawer?: () => void;
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
@@ -32,7 +33,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   onSelectFile,
   onCloseFile,
   isSaving,
-  readOnly = false
+  readOnly = false,
+  onOpenFilesDrawer
 }) => {
   // Determine CodeMirror language extension based on file extension
   const extensions = useMemo(() => {
@@ -69,10 +71,19 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
   if (!activeFile) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-[#0d1117] text-slate-500 p-6 select-none">
+      <div className="flex-1 flex flex-col items-center justify-center bg-[#0d1117] text-slate-500 p-6 select-none text-center">
         <FileCode className="w-12 h-12 mb-3 text-slate-600/50" />
-        <p className="text-sm font-medium text-slate-400">No file open</p>
-        <p className="text-xs text-slate-600 mt-1">Select a file from the explorer on the left to start editing</p>
+        <p className="text-sm font-medium text-slate-300">No file open</p>
+        <p className="text-xs text-slate-500 mt-1 max-w-xs">Select a file from the project explorer to start editing</p>
+        {onOpenFilesDrawer && (
+          <button
+            onClick={onOpenFilesDrawer}
+            className="mt-4 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-md shadow-rose-950/40 transition-all cursor-pointer min-h-[40px]"
+          >
+            <FolderTree className="w-4 h-4" />
+            <span>Open Project Files</span>
+          </button>
+        )}
       </div>
     );
   }
@@ -80,10 +91,22 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   const isUnsaved = unsavedFiles.has(activeFile.path);
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#0d1117] border-r border-slate-800/80" onKeyDown={handleKeyDown}>
+    <div className="flex-1 flex flex-col min-h-0 w-full max-w-full overflow-hidden bg-[#0d1117] border-r border-slate-800/80" onKeyDown={handleKeyDown}>
       {/* File Tabs Bar */}
       <div className="flex items-center justify-between bg-[#161b22] border-b border-slate-800/80 px-2 overflow-x-auto shrink-0 select-none">
         <div className="flex items-center gap-1 min-w-0">
+          {/* Quick Files button on mobile */}
+          {onOpenFilesDrawer && (
+            <button
+              onClick={onOpenFilesDrawer}
+              className="lg:hidden flex items-center gap-1.5 px-2.5 py-1.5 my-1 mr-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono shrink-0 min-h-[32px]"
+              title="Open File Explorer Drawer"
+            >
+              <FolderTree className="w-3.5 h-3.5 text-rose-400" />
+              <span>Files</span>
+            </button>
+          )}
+
           {openFiles.map(f => {
             const isActive = activeFile.path === f.path;
             const hasChanges = unsavedFiles.has(f.path);
