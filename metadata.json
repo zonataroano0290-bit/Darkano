@@ -1,0 +1,6 @@
+{
+  "name": "Darkano AI",
+  "description": "Premium dark futuristic AI workspace with modular chat, code, research, and analysis modes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
