@@ -12,6 +12,9 @@ import { ModelsModal } from './components/ModelsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { AccountModal } from './components/AccountModal';
 import { ShareModal } from './components/ShareModal';
+import { CreditsModal } from './components/CreditsModal';
+import { PlansModal } from './components/PlansModal';
+import { AdminModal } from './components/AdminModal';
 import { AuthScreen } from './components/AuthScreen';
 import { Shield } from 'lucide-react';
 
@@ -80,6 +83,9 @@ const DarkanoAppContent: React.FC = () => {
       <SettingsModal />
       <AccountModal />
       <ShareModal />
+      <CreditsModal />
+      <PlansModal />
+      <AdminModal />
     </div>
   );
 };

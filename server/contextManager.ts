@@ -11,6 +11,7 @@ export interface ValidationResult {
     message: string;
     model: string;
     mode: WorkspaceMode;
+    fileIds: string[];
     history: ChatHistoryMessage[];
     resolvedSystemPrompt: string;
     options: {
@@ -101,6 +102,12 @@ export function validateAndPrepareChatRequest(payload: any): ValidationResult {
     ? Math.max(0.1, Math.min(1, payload.options.topP))
     : 0.95;
 
+  const rawFileIds = Array.isArray(payload.fileIds) ? payload.fileIds : [];
+  const fileIds: string[] = rawFileIds
+    .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
+    .map((id: string) => id.trim())
+    .slice(0, 10);
+
   return {
     valid: true,
     sanitizedPayload: {
@@ -108,6 +115,7 @@ export function validateAndPrepareChatRequest(payload: any): ValidationResult {
       message: trimmedMessage,
       model: rawModel,
       mode,
+      fileIds,
       history: sanitizedHistory,
       resolvedSystemPrompt,
       options: {

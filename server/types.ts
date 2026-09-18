@@ -26,6 +26,13 @@ export interface ChatRequestPayload {
   message: string;
   model: string;
   mode: WorkspaceMode;
+  fileIds?: string[];
+  multimodalParts?: Array<{
+    inlineData: {
+      mimeType: string;
+      data: string;
+    };
+  }>;
   history?: ChatHistoryMessage[];
   options?: {
     temperature?: number;
@@ -43,12 +50,25 @@ export interface UsageMetadata {
   provider: string;
 }
 
+export interface CitationItem {
+  title?: string;
+  url?: string;
+  domain?: string;
+  sourceName?: string;
+  page?: number;
+  sheet?: string;
+  snippet?: string;
+}
+
 export interface StreamEventChunk {
-  type: 'chunk' | 'usage' | 'error' | 'done';
+  type: 'chunk' | 'usage' | 'error' | 'done' | 'stage' | 'sources' | 'citations';
   text?: string;
   usage?: UsageMetadata;
   error?: string;
   code?: string;
+  stage?: { stage: string; detail?: any };
+  sources?: Array<{ title: string; url: string; domain: string; snippet?: string }>;
+  citations?: CitationItem[];
 }
 
 export interface NonStreamChatResponse {
@@ -57,6 +77,8 @@ export interface NonStreamChatResponse {
   model: string;
   provider: string;
   usage?: UsageMetadata;
+  sources?: Array<{ title: string; url: string; domain: string; snippet?: string }>;
+  citations?: CitationItem[];
   status: 'completed' | 'error';
   errorMessage?: string;
 }

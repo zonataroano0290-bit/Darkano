@@ -12,7 +12,9 @@ import {
   Code2,
   Compass,
   BarChart3,
-  Trash2
+  Trash2,
+  Globe,
+  ExternalLink
 } from 'lucide-react';
 import { ChatMessage, WorkspaceMode } from '../types';
 import { useWorkspace } from '../context/WorkspaceContext';
@@ -262,7 +264,37 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
                   <span className="text-[10px] font-mono text-slate-400">
                     {(file.size / 1024).toFixed(0)} KB
                   </span>
+                  {file.metadata?.format && (
+                    <span className="text-[9px] font-mono uppercase px-1 py-0.2 rounded bg-rose-950/60 border border-rose-800/40 text-rose-300">
+                      {file.metadata.format}
+                    </span>
+                  )}
                 </div>
+              ))}
+            </div>
+          )}
+
+          {/* Real Pipeline Stage Indicator */}
+          {message.currentStage && (
+            <div className="flex items-center gap-2 px-3 py-1.5 mb-2.5 rounded-xl bg-rose-950/30 border border-rose-800/40 text-rose-300 font-mono text-xs animate-pulse">
+              <Compass className="w-3.5 h-3.5 text-rose-400 animate-spin" />
+              <span>{message.currentStage}</span>
+            </div>
+          )}
+
+          {/* Citations Tag Chips */}
+          {message.citations && message.citations.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2.5">
+              {message.citations.map((c, i) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.04] border border-rose-900/40 text-[10px] font-mono text-rose-300"
+                >
+                  <FileText className="w-3 h-3 text-rose-400" />
+                  <span>{c.sourceName || 'Document'}</span>
+                  {c.page !== undefined && <span>(p. {c.page})</span>}
+                  {c.sheet && <span>({c.sheet})</span>}
+                </span>
               ))}
             </div>
           )}
@@ -302,6 +334,46 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
                   <span>[Generation stopped by user]</span>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Verified Grounded Sources Card (Research Mode) */}
+          {message.sources && message.sources.length > 0 && (
+            <div className="mt-3.5 p-3 rounded-xl bg-[#0e0307]/80 border border-rose-900/40 space-y-2">
+              <div className="flex items-center justify-between text-xs font-mono font-semibold text-rose-300">
+                <div className="flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Verified Grounded Sources ({message.sources.length})</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-normal">Real Search Grounding</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {message.sources.map((src, sIdx) => (
+                  <a
+                    key={sIdx}
+                    href={src.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-lg bg-black/40 border border-rose-950/60 hover:border-rose-700/50 hover:bg-rose-950/20 transition-all flex items-start gap-2 text-left group/src"
+                  >
+                    <Globe className="w-3.5 h-3.5 text-rose-400/80 shrink-0 mt-0.5 group-hover/src:text-rose-300" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-medium text-slate-200 truncate group-hover/src:text-white">
+                        {src.title}
+                      </div>
+                      <div className="text-[10px] font-mono text-rose-400/80 flex items-center gap-1 mt-0.5">
+                        <span className="truncate">{src.domain}</span>
+                        <ExternalLink className="w-2.5 h-2.5 opacity-60 group-hover/src:opacity-100 shrink-0" />
+                      </div>
+                      {src.snippet && (
+                        <div className="text-[10px] text-slate-400 line-clamp-1 mt-0.5">
+                          {src.snippet}
+                        </div>
+                      )}
+                    </div>
+                  </a>
+                ))}
+              </div>
             </div>
           )}
 

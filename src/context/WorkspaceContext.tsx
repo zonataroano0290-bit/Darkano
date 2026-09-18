@@ -19,6 +19,7 @@ interface WorkspaceContextType {
   isAuthenticated: boolean;
   authLoading: boolean;
   currentUser: AuthUser | null;
+  token: string | null;
   authError: string | null;
   clearAuthError: () => void;
   login: (email: string, password: string) => Promise<void>;
@@ -27,6 +28,7 @@ interface WorkspaceContextType {
   forgotPassword: (email: string) => Promise<{ success: boolean; message: string; resetToken?: string }>;
   resetPassword: (token: string, newPassword: string) => Promise<{ success: boolean; message: string }>;
   updateUserProfile: (displayName: string) => Promise<void>;
+  refreshCredits: () => Promise<void>;
 
   // Navigation & Views
   currentView: ViewSection;
@@ -254,6 +256,55 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, []);
 
+  // Phase 5: Fetch persistent files and storage quota from backend
+  const fetchUserFiles = useCallback(async (authToken: string) => {
+    try {
+      const res = await fetch('/api/files', {
+        headers: {
+          Authorization: `Bearer ${authToken}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.files)) {
+          const loadedFiles: UploadedFile[] = data.files.map((f: any) => {
+            const ext = f.originalName.split('.').pop()?.toLowerCase() || '';
+            let meta = {};
+            try {
+              if (f.metadataJson) meta = JSON.parse(f.metadataJson);
+            } catch {}
+            return {
+              id: f.id,
+              name: f.originalName,
+              size: f.fileSize,
+              type: f.mimeType,
+              extension: ext,
+              progress: 100,
+              status: f.status === 'ready' ? 'ready' : (f.status === 'failed' ? 'error' : 'processing'),
+              uploadTimestamp: new Date(f.createdAt).getTime(),
+              previewContent: f.extractedText?.slice(0, 1000) || '',
+              metadata: meta,
+              processingError: f.processingError
+            };
+          });
+          setFiles(loadedFiles);
+        }
+        if (data.storage?.totalBytes !== undefined) {
+          const mb = Number((data.storage.totalBytes / (1024 * 1024)).toFixed(2));
+          setUserProfile(prev => ({
+            ...prev,
+            quota: {
+              ...prev.quota,
+              storageUsedMb: mb
+            }
+          }));
+        }
+      }
+    } catch (err) {
+      console.error('[Darkano Client] Failed to fetch user files:', err);
+    }
+  }, []);
+
   // Load messages for a single conversation
   const loadConversationMessages = async (convId: string, customToken?: string) => {
     const activeTok = customToken || token;
@@ -328,8 +379,9 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               }
             });
 
-            // Fetch conversations for authenticated user
+            // Fetch conversations and files for authenticated user
             await fetchUserConversations(savedToken);
+            await fetchUserFiles(savedToken);
           }
         } else {
           // Token expired or invalid
@@ -349,7 +401,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
 
     restoreSession();
-  }, [fetchUserConversations]);
+  }, [fetchUserConversations, fetchUserFiles]);
 
   // Sync backend health & models catalog
   useEffect(() => {
@@ -437,6 +489,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       });
 
       await fetchUserConversations(data.token);
+      await fetchUserFiles(data.token);
     } catch (err: any) {
       setAuthError(err?.message || 'Failed to sign in');
       throw err;
@@ -487,6 +540,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       setConversations([]);
       setActiveConversationId(null);
+      await fetchUserFiles(data.token);
     } catch (err: any) {
       setAuthError(err?.message || 'Failed to register account');
       throw err;
@@ -570,6 +624,30 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     } catch (err) {
       console.error('[Darkano Client] Failed to update profile:', err);
+    }
+  };
+
+  // 7. Refresh Credits and Role from Server
+  const refreshCredits = async () => {
+    const activeTok = token || localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (!activeTok) return;
+    try {
+      const res = await fetch('/api/credits/balance', {
+        headers: {
+          Authorization: `Bearer ${activeTok}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentUser(prev => prev ? {
+          ...prev,
+          creditBalance: data.balance,
+          role: data.userRole || prev.role,
+          plan: data.plan || prev.plan
+        } : null);
+      }
+    } catch (err) {
+      console.warn('[Darkano Client] Failed to refresh credits:', err);
     }
   };
 
@@ -836,6 +914,8 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     activeAbortControllerRef.current = abortController;
 
     try {
+      const fileIdsPayload = filesToAttach.map(f => f.id).filter(id => !id.startsWith('temp_'));
+
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: getAuthHeaders(),
@@ -844,6 +924,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           message: trimmed,
           model: selectedModelId,
           mode: activeMode,
+          fileIds: fileIdsPayload,
           history: historyPayload,
           options: {
             temperature: settings.chat.temperature,
@@ -856,6 +937,9 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        if (response.status === 402 || errorData.code === 'INSUFFICIENT_CREDITS') {
+          openModal('credits');
+        }
         throw new Error(errorData.error || `Server responded with status ${response.status}`);
       }
 
@@ -897,7 +981,82 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           try {
             const parsed = JSON.parse(dataStr);
 
-            if (eventType === 'chunk' && typeof parsed.text === 'string') {
+            if (eventType === 'stage') {
+              let stageLabel = '';
+              if (parsed.stage === 'searching') {
+                stageLabel = `Searching live web for "${parsed.query || 'query'}"...`;
+              } else if (parsed.stage === 'retrieving_context') {
+                stageLabel = `Loading ${parsed.count || ''} attached document context(s)...`;
+              } else if (parsed.stage === 'analyzing_document') {
+                stageLabel = `Analyzing ${parsed.files?.join(', ') || 'documents'}...`;
+              } else if (parsed.stage === 'reading') {
+                stageLabel = `Reviewing verified sources...`;
+              } else if (parsed.stage === 'synthesizing') {
+                stageLabel = `Synthesizing analytical findings...`;
+              } else if (typeof parsed.stage === 'string') {
+                stageLabel = parsed.stage;
+              }
+
+              setConversations(prev =>
+                prev.map(c => {
+                  if (c.id === targetConvId) {
+                    return {
+                      ...c,
+                      messages: c.messages.map(m => {
+                        if (m.id === assistantMessageId) {
+                          return {
+                            ...m,
+                            currentStage: stageLabel
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return c;
+                })
+              );
+            } else if (eventType === 'sources' && Array.isArray(parsed)) {
+              setConversations(prev =>
+                prev.map(c => {
+                  if (c.id === targetConvId) {
+                    return {
+                      ...c,
+                      messages: c.messages.map(m => {
+                        if (m.id === assistantMessageId) {
+                          return {
+                            ...m,
+                            sources: parsed
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return c;
+                })
+              );
+            } else if (eventType === 'citations' && Array.isArray(parsed)) {
+              setConversations(prev =>
+                prev.map(c => {
+                  if (c.id === targetConvId) {
+                    return {
+                      ...c,
+                      messages: c.messages.map(m => {
+                        if (m.id === assistantMessageId) {
+                          return {
+                            ...m,
+                            citations: parsed
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return c;
+                })
+              );
+            } else if (eventType === 'chunk' && typeof parsed.text === 'string') {
               accumulatedText += parsed.text;
               setStreamTick(t => t + 1);
 
@@ -911,7 +1070,8 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                           return {
                             ...m,
                             content: accumulatedText,
-                            status: 'streaming'
+                            status: 'streaming',
+                            currentStage: undefined
                           };
                         }
                         return m;
@@ -954,6 +1114,10 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                   return c;
                 })
               );
+            } else if (eventType === 'credits' && parsed) {
+              if (typeof parsed.balanceAfter === 'number') {
+                setCurrentUser(prev => prev ? { ...prev, creditBalance: parsed.balanceAfter } : null);
+              }
             } else if (eventType === 'error') {
               throw new Error(parsed.error || 'Stream encountered error');
             } else if (eventType === 'done') {
@@ -1089,32 +1253,159 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setStagedComposerFiles([]);
   };
 
-  const uploadFiles = (fileList: FileList | File[]) => {
+  const uploadFiles = async (fileList: FileList | File[]) => {
     const filesArray = Array.from(fileList);
-    const newFiles: UploadedFile[] = filesArray.map((file, idx) => {
+    if (filesArray.length === 0) return;
+
+    if (!token) {
+      setErrorState('Please sign in to upload and analyze files in your Darkano Vault.');
+      return;
+    }
+
+    const tempIds: string[] = [];
+    const pendingFiles: UploadedFile[] = filesArray.map((file, idx) => {
+      const tempId = `temp_${Date.now()}_${idx}`;
+      tempIds.push(tempId);
       const extension = file.name.split('.').pop()?.toLowerCase() || '';
       return {
-        id: `file_${Date.now()}_${idx}`,
+        id: tempId,
         name: file.name,
         size: file.size,
         type: file.type || 'application/octet-stream',
         extension,
-        progress: 100,
-        status: 'ready',
-        uploadTimestamp: Date.now(),
-        previewContent: `File ${file.name} ready in memory context.`
+        progress: 0,
+        status: 'uploading',
+        uploadTimestamp: Date.now()
       };
     });
 
-    setFiles(prev => [...newFiles, ...prev]);
-    newFiles.forEach(f => stageComposerFile(f));
+    setFiles(prev => [...pendingFiles, ...prev]);
+
+    const formData = new FormData();
+    filesArray.forEach(file => {
+      formData.append('files', file);
+    });
+
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/files/upload', true);
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          setFiles(prev =>
+            prev.map(f => (tempIds.includes(f.id) ? { ...f, progress: percent } : f))
+          );
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (Array.isArray(data.files)) {
+              const processedList: UploadedFile[] = data.files.map((f: any) => {
+                const ext = f.originalName.split('.').pop()?.toLowerCase() || '';
+                let meta = {};
+                try {
+                  if (f.metadataJson) meta = JSON.parse(f.metadataJson);
+                } catch {}
+                return {
+                  id: f.id,
+                  name: f.originalName,
+                  size: f.fileSize,
+                  type: f.mimeType,
+                  extension: ext,
+                  progress: 100,
+                  status: f.status === 'ready' ? 'ready' : (f.status === 'failed' ? 'error' : 'processing'),
+                  uploadTimestamp: new Date(f.createdAt).getTime(),
+                  previewContent: f.extractedText?.slice(0, 1000) || '',
+                  metadata: meta,
+                  processingError: f.processingError
+                };
+              });
+
+              setFiles(prev => {
+                const filtered = prev.filter(f => !tempIds.includes(f.id));
+                return [...processedList, ...filtered];
+              });
+
+              // Auto-stage newly processed files into composer
+              processedList.forEach(pf => stageComposerFile(pf));
+
+              if (data.storage?.totalBytes !== undefined) {
+                const mb = Number((data.storage.totalBytes / (1024 * 1024)).toFixed(2));
+                setUserProfile(prev => ({
+                  ...prev,
+                  quota: {
+                    ...prev.quota,
+                    storageUsedMb: mb
+                  }
+                }));
+              }
+            }
+          } catch (pe) {
+            console.error('[Darkano Client] Failed to parse upload response:', pe);
+          }
+        } else {
+          let errMessage = 'File upload failed';
+          try {
+            const errData = JSON.parse(xhr.responseText);
+            errMessage = errData.error || errMessage;
+          } catch {}
+          setErrorState(errMessage);
+          setFiles(prev =>
+            prev.map(f => (tempIds.includes(f.id) ? { ...f, status: 'error', processingError: errMessage } : f))
+          );
+        }
+      };
+
+      xhr.onerror = () => {
+        setErrorState('Network error during file upload');
+        setFiles(prev =>
+          prev.map(f => (tempIds.includes(f.id) ? { ...f, status: 'error', processingError: 'Network error' } : f))
+        );
+      };
+
+      xhr.send(formData);
+    } catch (uploadEx: any) {
+      setErrorState(uploadEx?.message || 'File upload exception');
+      setFiles(prev =>
+        prev.map(f => (tempIds.includes(f.id) ? { ...f, status: 'error' } : f))
+      );
+    }
   };
 
-  const removeFile = (fileId: string) => {
+  const removeFile = async (fileId: string) => {
     setFiles(prev => prev.filter(f => f.id !== fileId));
     unstageComposerFile(fileId);
     if (activePreviewFile?.id === fileId) {
       setActivePreviewFile(null);
+    }
+
+    if (token && !fileId.startsWith('temp_')) {
+      try {
+        const res = await fetch(`/api/files/${fileId}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders()
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.storage?.totalBytes !== undefined) {
+            const mb = Number((data.storage.totalBytes / (1024 * 1024)).toFixed(2));
+            setUserProfile(prev => ({
+              ...prev,
+              quota: {
+                ...prev.quota,
+                storageUsedMb: mb
+              }
+            }));
+          }
+        }
+      } catch (delErr) {
+        console.warn('[Darkano Client] File deletion error:', delErr);
+      }
     }
   };
 
@@ -1123,6 +1414,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     isAuthenticated: !!currentUser && !!token,
     authLoading,
     currentUser,
+    token,
     authError,
     clearAuthError,
     login,
@@ -1131,6 +1423,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     forgotPassword,
     resetPassword,
     updateUserProfile,
+    refreshCredits,
 
     // Navigation
     currentView,

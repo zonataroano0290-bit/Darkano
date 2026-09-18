@@ -84,29 +84,40 @@ export class DarkanoProvider extends BaseAIProvider {
     ];
   }
 
-  private sanitizeContents(history: ProviderChatOptions['history'], currentMessage: string) {
-    const rawTurns: { role: 'user' | 'model'; text: string }[] = [];
+  private sanitizeContents(
+    history: ProviderChatOptions['history'],
+    currentMessage: string,
+    multimodalParts?: ProviderChatOptions['multimodalParts']
+  ) {
+    const rawTurns: { role: 'user' | 'model'; parts: any[] }[] = [];
 
     if (history && history.length > 0) {
       for (const h of history) {
         if (!h.content || h.content.trim().length === 0) continue;
         const role = h.role === 'assistant' ? 'model' : 'user';
-        rawTurns.push({ role, text: h.content });
+        rawTurns.push({ role, parts: [{ text: h.content }] });
       }
     }
 
-    rawTurns.push({ role: 'user', text: currentMessage });
+    const userParts: any[] = [{ text: currentMessage }];
+    if (multimodalParts && multimodalParts.length > 0) {
+      for (const mp of multimodalParts) {
+        userParts.push(mp);
+      }
+    }
 
-    const consolidatedTurns: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
+    rawTurns.push({ role: 'user', parts: userParts });
+
+    const consolidatedTurns: { role: 'user' | 'model'; parts: any[] }[] = [];
 
     for (const turn of rawTurns) {
       const lastTurn = consolidatedTurns[consolidatedTurns.length - 1];
       if (lastTurn && lastTurn.role === turn.role) {
-        lastTurn.parts[0].text += `\n\n${turn.text}`;
+        lastTurn.parts.push(...turn.parts);
       } else {
         consolidatedTurns.push({
           role: turn.role,
-          parts: [{ text: turn.text }]
+          parts: [...turn.parts]
         });
       }
     }
@@ -118,7 +129,7 @@ export class DarkanoProvider extends BaseAIProvider {
     if (consolidatedTurns.length === 0) {
       consolidatedTurns.push({
         role: 'user',
-        parts: [{ text: currentMessage }]
+        parts: userParts
       });
     }
 
@@ -131,7 +142,7 @@ export class DarkanoProvider extends BaseAIProvider {
   ): AsyncGenerator<StreamEventChunk, void, unknown> {
     const startTime = Date.now();
     const client = this.getClient();
-    const contents = this.sanitizeContents(options.history, options.message);
+    const contents = this.sanitizeContents(options.history, options.message, options.multimodalParts);
 
     // Tune parameters based on model specialty
     let temp = options.options?.temperature ?? 0.7;
@@ -149,6 +160,9 @@ export class DarkanoProvider extends BaseAIProvider {
       targetModel = 'gemini-3.1-flash-lite';
     }
 
+    // If research mode is active, enable Google Search Grounding
+    const tools = options.mode === 'research' ? [{ googleSearch: {} }] : undefined;
+
     const tryGenerate = async (modelToUse: string) => {
       return await client.models.generateContentStream({
         model: modelToUse,
@@ -156,7 +170,8 @@ export class DarkanoProvider extends BaseAIProvider {
         config: {
           systemInstruction: options.resolvedSystemPrompt,
           temperature: temp,
-          topP
+          topP,
+          ...(tools && tools.length > 0 ? { tools: tools as any } : {})
         }
       });
     };
@@ -185,6 +200,7 @@ export class DarkanoProvider extends BaseAIProvider {
       let promptTokens = 0;
       let completionTokens = 0;
       let totalTokens = 0;
+      const collectedSources: Array<{ title: string; url: string; domain: string; snippet?: string }> = [];
 
       for await (const chunk of responseStream) {
         if (abortSignal?.aborted) {
@@ -196,11 +212,46 @@ export class DarkanoProvider extends BaseAIProvider {
           yield { type: 'chunk', text };
         }
 
+        // Capture grounding metadata if web search was performed
+        const grounding = (chunk.candidates?.[0] as any)?.groundingMetadata;
+        if (grounding?.groundingChunks && Array.isArray(grounding.groundingChunks)) {
+          for (const gc of grounding.groundingChunks) {
+            if (gc.web?.uri) {
+              const url = gc.web.uri;
+              let domain = '';
+              try { domain = new URL(url).hostname; } catch {}
+              if (!collectedSources.some(s => s.url === url)) {
+                collectedSources.push({
+                  title: gc.web.title || domain || 'Web Resource',
+                  url,
+                  domain,
+                  snippet: gc.web.title || ''
+                });
+              }
+            }
+          }
+        }
+
         if (chunk.usageMetadata) {
           promptTokens = chunk.usageMetadata.promptTokenCount || promptTokens;
           completionTokens = chunk.usageMetadata.candidatesTokenCount || completionTokens;
           totalTokens = chunk.usageMetadata.totalTokenCount || totalTokens;
         }
+      }
+
+      if (collectedSources.length > 0) {
+        yield {
+          type: 'sources',
+          sources: collectedSources
+        };
+        yield {
+          type: 'citations',
+          citations: collectedSources.map(s => ({
+            title: s.title,
+            url: s.url,
+            domain: s.domain
+          }))
+        };
       }
 
       const latencyMs = Date.now() - startTime;

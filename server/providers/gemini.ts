@@ -69,32 +69,43 @@ export class GeminiProvider extends BaseAIProvider {
     ];
   }
 
-  private sanitizeContents(history: ProviderChatOptions['history'], currentMessage: string) {
-    const rawTurns: { role: 'user' | 'model'; text: string }[] = [];
+  private sanitizeContents(
+    history: ProviderChatOptions['history'],
+    currentMessage: string,
+    multimodalParts?: ProviderChatOptions['multimodalParts']
+  ) {
+    const rawTurns: { role: 'user' | 'model'; parts: any[] }[] = [];
 
     if (history && history.length > 0) {
       for (const h of history) {
         if (!h.content || h.content.trim().length === 0) continue;
         const role = h.role === 'assistant' ? 'model' : 'user';
-        rawTurns.push({ role, text: h.content });
+        rawTurns.push({ role, parts: [{ text: h.content }] });
       }
     }
 
     // Append the current message
-    rawTurns.push({ role: 'user', text: currentMessage });
+    const userParts: any[] = [{ text: currentMessage }];
+    if (multimodalParts && multimodalParts.length > 0) {
+      for (const mp of multimodalParts) {
+        userParts.push(mp);
+      }
+    }
+
+    rawTurns.push({ role: 'user', parts: userParts });
 
     // Gemini requires alternating roles, starting with 'user'.
-    const consolidatedTurns: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
+    const consolidatedTurns: { role: 'user' | 'model'; parts: any[] }[] = [];
 
     for (const turn of rawTurns) {
       const lastTurn = consolidatedTurns[consolidatedTurns.length - 1];
       if (lastTurn && lastTurn.role === turn.role) {
         // Merge consecutive identical roles
-        lastTurn.parts[0].text += `\n\n${turn.text}`;
+        lastTurn.parts.push(...turn.parts);
       } else {
         consolidatedTurns.push({
           role: turn.role,
-          parts: [{ text: turn.text }]
+          parts: [...turn.parts]
         });
       }
     }
@@ -108,7 +119,7 @@ export class GeminiProvider extends BaseAIProvider {
     if (consolidatedTurns.length === 0) {
       consolidatedTurns.push({
         role: 'user',
-        parts: [{ text: currentMessage }]
+        parts: userParts
       });
     }
 
@@ -122,7 +133,10 @@ export class GeminiProvider extends BaseAIProvider {
     const startTime = Date.now();
     const client = this.getClient();
     const targetModel = options.model === 'gemini-2.5-pro' ? 'gemini-3.8-flash' : 'gemini-3.8-flash';
-    const contents = this.sanitizeContents(options.history, options.message);
+    const contents = this.sanitizeContents(options.history, options.message, options.multimodalParts);
+
+    // If research mode is active, enable Google Search Grounding
+    const tools = options.mode === 'research' ? [{ googleSearch: {} }] : undefined;
 
     const tryGenerate = async (modelToUse: string) => {
       return await client.models.generateContentStream({
@@ -131,7 +145,8 @@ export class GeminiProvider extends BaseAIProvider {
         config: {
           systemInstruction: options.resolvedSystemPrompt,
           temperature: options.options?.temperature ?? 0.7,
-          topP: options.options?.topP ?? 0.95
+          topP: options.options?.topP ?? 0.95,
+          ...(tools && tools.length > 0 ? { tools: tools as any } : {})
         }
       });
     };
@@ -161,6 +176,7 @@ export class GeminiProvider extends BaseAIProvider {
       let promptTokens = 0;
       let completionTokens = 0;
       let totalTokens = 0;
+      const collectedSources: Array<{ title: string; url: string; domain: string; snippet?: string }> = [];
 
       for await (const chunk of responseStream) {
         if (abortSignal?.aborted) {
@@ -173,12 +189,47 @@ export class GeminiProvider extends BaseAIProvider {
           yield { type: 'chunk', text };
         }
 
+        // Capture grounding metadata if web search was performed
+        const grounding = (chunk.candidates?.[0] as any)?.groundingMetadata;
+        if (grounding?.groundingChunks && Array.isArray(grounding.groundingChunks)) {
+          for (const gc of grounding.groundingChunks) {
+            if (gc.web?.uri) {
+              const url = gc.web.uri;
+              let domain = '';
+              try { domain = new URL(url).hostname; } catch {}
+              if (!collectedSources.some(s => s.url === url)) {
+                collectedSources.push({
+                  title: gc.web.title || domain || 'Web Resource',
+                  url,
+                  domain,
+                  snippet: gc.web.title || ''
+                });
+              }
+            }
+          }
+        }
+
         // Capture usage metadata if provided by the model stream
         if (chunk.usageMetadata) {
           promptTokens = chunk.usageMetadata.promptTokenCount || promptTokens;
           completionTokens = chunk.usageMetadata.candidatesTokenCount || completionTokens;
           totalTokens = chunk.usageMetadata.totalTokenCount || totalTokens;
         }
+      }
+
+      if (collectedSources.length > 0) {
+        yield {
+          type: 'sources',
+          sources: collectedSources
+        };
+        yield {
+          type: 'citations',
+          citations: collectedSources.map(s => ({
+            title: s.title,
+            url: s.url,
+            domain: s.domain
+          }))
+        };
       }
 
       const latencyMs = Date.now() - startTime;

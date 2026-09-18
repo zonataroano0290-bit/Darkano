@@ -3,7 +3,9 @@ import {
   Menu,
   Plus,
   Cpu,
-  ChevronDown
+  ChevronDown,
+  Zap,
+  ShieldCheck
 } from 'lucide-react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { BrandLogo } from './BrandLogo';
@@ -16,7 +18,8 @@ export const Header: React.FC = () => {
     createNewConversation,
     activeMode,
     messages,
-    userProfile
+    userProfile,
+    currentUser
   } = useWorkspace();
 
   const handleOpenMenu = () => {
@@ -26,6 +29,8 @@ export const Header: React.FC = () => {
   const handleNewChat = () => {
     createNewConversation(activeMode);
   };
+
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'owner';
 
   return (
     <header className="h-14 px-3 sm:px-5 flex items-center justify-between bg-[#080205]/80 backdrop-blur-xl border-b border-rose-950/40 shrink-0 select-none z-20">
@@ -48,8 +53,35 @@ export const Header: React.FC = () => {
         </div>
       </div>
 
-      {/* Right: Small Model Indicator & Quick New Chat */}
+      {/* Right: Credits, Model Indicator, Admin, Account & Quick New Chat */}
       <div className="flex items-center gap-2">
+        {/* Credit Balance Indicator Badge */}
+        <button
+          onClick={() => openModal('credits')}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono text-rose-200 hover:text-white bg-rose-950/30 hover:bg-rose-950/60 border border-rose-800/40 hover:border-rose-600/60 transition-all cursor-pointer shadow-sm"
+          title="Server-authoritative compute credits"
+          id="header-credit-balance-btn"
+        >
+          <Zap className="w-3.5 h-3.5 text-rose-400 fill-rose-400/20" />
+          <span className="font-bold">
+            {(currentUser?.creditBalance ?? 500).toLocaleString()}
+          </span>
+          <span className="hidden sm:inline text-rose-300 text-[10px]">cr</span>
+        </button>
+
+        {/* Admin Console Shortcut (Only visible to admin/owner) */}
+        {isAdmin && (
+          <button
+            onClick={() => openModal('admin')}
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-mono text-amber-300 hover:text-white bg-amber-950/30 hover:bg-amber-950/60 border border-amber-800/40 hover:border-amber-600/60 transition-all cursor-pointer shadow-sm"
+            title="Darkano Core Admin Console"
+            id="header-admin-console-btn"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden md:inline font-medium">Admin</span>
+          </button>
+        )}
+
         {/* Small Model Indicator pill */}
         <button
           onClick={() => openModal('models')}
@@ -59,7 +91,7 @@ export const Header: React.FC = () => {
         >
           <div className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
           <Cpu className="w-3.5 h-3.5 text-rose-400 hidden xs:inline" />
-          <span className="truncate max-w-[100px] sm:max-w-[150px] font-medium">{selectedModel.name}</span>
+          <span className="truncate max-w-[90px] sm:max-w-[130px] font-medium">{selectedModel.name}</span>
           <ChevronDown className="w-3 h-3 text-slate-400" />
         </button>
 
@@ -73,7 +105,7 @@ export const Header: React.FC = () => {
           <div className="w-5 h-5 rounded-md bg-gradient-to-br from-rose-900 to-neutral-900 border border-rose-600/50 flex items-center justify-center text-[10px] font-bold text-rose-200">
             {userProfile.avatarText}
           </div>
-          <span className="hidden sm:inline font-sans text-xs truncate max-w-[100px]">{userProfile.name.split(' ')[0]}</span>
+          <span className="hidden sm:inline font-sans text-xs truncate max-w-[90px]">{userProfile.name.split(' ')[0]}</span>
         </button>
 
         {/* New Chat Quick Button (shown especially when in conversation) */}

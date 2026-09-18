@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   UploadCloud,
   FileText,
@@ -12,7 +12,9 @@ import {
   Eye,
   X,
   AlertCircle,
-  FolderTree
+  FolderTree,
+  Download,
+  Loader2
 } from 'lucide-react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { UploadedFile } from '../types';
@@ -24,12 +26,80 @@ export const FilesView: React.FC = () => {
     removeFile,
     stageComposerFile,
     setCurrentView,
-    userProfile
+    userProfile,
+    token
   } = useWorkspace();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [activePreviewFile, setActivePreviewFile] = useState<UploadedFile | null>(null);
+  const [detailedPreview, setDetailedPreview] = useState<{
+    text?: string;
+    table?: { headers: string[]; rows: any[][] };
+    metadata?: any;
+    loading?: boolean;
+    error?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!activePreviewFile || activePreviewFile.id.startsWith('temp_')) {
+      setDetailedPreview(null);
+      return;
+    }
+
+    let isMounted = true;
+    setDetailedPreview({ loading: true });
+
+    fetch(`/api/files/${activePreviewFile.id}/preview`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
+      .then(res => {
+        if (!res.ok) throw new Error('Preview not available');
+        return res.json();
+      })
+      .then(data => {
+        if (!isMounted) return;
+        setDetailedPreview({
+          text: data.extractedText,
+          table: data.tablePreview,
+          metadata: data.metadata,
+          loading: false
+        });
+      })
+      .catch(err => {
+        if (!isMounted) return;
+        setDetailedPreview({
+          text: activePreviewFile.previewContent,
+          loading: false,
+          error: err.message
+        });
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activePreviewFile, token]);
+
+  const handleDownload = async (file: UploadedFile) => {
+    if (!token || file.id.startsWith('temp_')) return;
+    try {
+      const res = await fetch(`/api/files/${file.id}/download`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to download file');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      console.error('[Download error]:', e);
+    }
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -212,11 +282,27 @@ export const FilesView: React.FC = () => {
                         <span className="text-rose-400 animate-pulse font-semibold">
                           Uploading {file.progress}%
                         </span>
+                      ) : file.status === 'processing' ? (
+                        <span className="text-amber-400 flex items-center gap-1 font-semibold animate-pulse">
+                          <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                          Processing text...
+                        </span>
+                      ) : file.status === 'error' ? (
+                        <span className="text-red-400 flex items-center gap-1 font-semibold" title={file.processingError}>
+                          <AlertCircle className="w-2.5 h-2.5" />
+                          Failed
+                        </span>
                       ) : (
                         <span className="text-emerald-400 flex items-center gap-1 font-semibold">
                           <CheckCircle2 className="w-2.5 h-2.5" />
-                          Staged
+                          Ready & Indexed
                         </span>
+                      )}
+                      {file.metadata?.pageCount && (
+                        <span className="text-slate-400">({file.metadata.pageCount} pgs)</span>
+                      )}
+                      {file.metadata?.rowCount && (
+                        <span className="text-slate-400">({file.metadata.rowCount} rows)</span>
                       )}
                     </div>
                     {/* Progress bar if uploading */}
@@ -248,9 +334,17 @@ export const FilesView: React.FC = () => {
                   <button
                     onClick={() => setActivePreviewFile(file)}
                     className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
-                    title="Preview file details"
+                    title="Preview file content"
                   >
                     <Eye className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    onClick={() => handleDownload(file)}
+                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                    title="Download original file"
+                  >
+                    <Download className="w-4 h-4" />
                   </button>
 
                   <button
@@ -270,9 +364,9 @@ export const FilesView: React.FC = () => {
       {/* File Preview Modal */}
       {activePreviewFile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="w-full max-w-xl bg-[#0c0307]/95 rounded-2xl p-6 border border-rose-950/60 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150 text-slate-200">
-            <div className="flex items-center justify-between border-b border-rose-950/40 pb-3">
-              <div className="flex items-center gap-2">
+          <div className="w-full max-w-2xl bg-[#0c0307]/95 rounded-2xl p-6 border border-rose-950/60 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150 text-slate-200 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-rose-950/40 pb-3 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
                 {getFileIcon(activePreviewFile.extension)}
                 <h3 className="text-sm font-bold text-white font-mono truncate max-w-md">
                   {activePreviewFile.name}
@@ -280,13 +374,13 @@ export const FilesView: React.FC = () => {
               </div>
               <button
                 onClick={() => setActivePreviewFile(null)}
-                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-white/5"
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs font-mono bg-white/[0.02] p-3 rounded-xl border border-rose-950/40">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono bg-white/[0.02] p-3 rounded-xl border border-rose-950/40 shrink-0">
               <div>
                 <span className="text-slate-400">File Size:</span>{' '}
                 <span className="text-slate-200">{formatBytes(activePreviewFile.size)}</span>
@@ -297,24 +391,70 @@ export const FilesView: React.FC = () => {
               </div>
               <div>
                 <span className="text-slate-400">Status:</span>{' '}
-                <span className="text-emerald-400">Verified & Staged</span>
+                <span className={activePreviewFile.status === 'ready' ? 'text-emerald-400' : 'text-amber-400'}>
+                  {activePreviewFile.status === 'ready' ? 'Indexed & Staged' : activePreviewFile.status}
+                </span>
               </div>
               <div>
-                <span className="text-slate-400">Context Slot:</span>{' '}
+                <span className="text-slate-400">Context:</span>{' '}
                 <span className="text-rose-300">Ready for Inference</span>
               </div>
             </div>
 
-            {activePreviewFile.previewContent && (
-              <div>
-                <div className="text-[11px] font-mono text-slate-400 mb-1">Preview Snippet:</div>
-                <pre className="p-3 bg-black/60 rounded-xl border border-rose-950/50 text-xs font-mono text-slate-300 overflow-x-auto">
-                  <code>{activePreviewFile.previewContent}</code>
-                </pre>
-              </div>
-            )}
+            {/* Content area with tab or scroll */}
+            <div className="flex-1 overflow-y-auto min-h-0 space-y-3">
+              {detailedPreview?.loading ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs font-mono text-slate-400">
+                  <Loader2 className="w-5 h-5 animate-spin text-rose-400" />
+                  <span>Loading parsed content from vault...</span>
+                </div>
+              ) : detailedPreview?.table ? (
+                <div>
+                  <div className="text-[11px] font-mono text-rose-300 mb-1">Tabular Data Preview:</div>
+                  <div className="overflow-x-auto border border-rose-950/50 rounded-xl bg-black/60">
+                    <table className="w-full text-left text-xs font-mono">
+                      <thead className="bg-rose-950/40 border-b border-rose-900/40 text-rose-300">
+                        <tr>
+                          {detailedPreview.table.headers.map((h, i) => (
+                            <th key={i} className="p-2.5 font-semibold">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-rose-950/30 text-slate-300">
+                        {detailedPreview.table.rows.map((row, rIdx) => (
+                          <tr key={rIdx} className="hover:bg-rose-950/20">
+                            {row.map((cell, cIdx) => (
+                              <td key={cIdx} className="p-2.5 truncate max-w-[200px]">{String(cell ?? '')}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (detailedPreview?.text || activePreviewFile.previewContent) ? (
+                <div>
+                  <div className="text-[11px] font-mono text-slate-400 mb-1">Extracted Text Content:</div>
+                  <pre className="p-3 bg-black/60 rounded-xl border border-rose-950/50 text-xs font-mono text-slate-300 overflow-x-auto max-h-64 whitespace-pre-wrap leading-relaxed">
+                    <code>{detailedPreview?.text || activePreviewFile.previewContent}</code>
+                  </pre>
+                </div>
+              ) : (
+                <div className="py-8 text-center text-xs font-mono text-slate-400">
+                  No text preview available for this file type.
+                </div>
+              )}
+            </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-between items-center gap-2 pt-2 border-t border-rose-950/40 shrink-0">
+              <button
+                onClick={() => handleDownload(activePreviewFile)}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-300 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 rounded-xl transition-all cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-rose-400" />
+                <span>Download</span>
+              </button>
+
               <button
                 onClick={() => {
                   stageComposerFile(activePreviewFile);

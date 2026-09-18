@@ -9,7 +9,9 @@ import {
   CheckCircle,
   Shield,
   Edit2,
-  Check
+  Check,
+  Zap,
+  Coins
 } from 'lucide-react';
 import { useWorkspace } from '../context/WorkspaceContext';
 
@@ -135,6 +137,43 @@ export const AccountModal: React.FC = () => {
                 </span>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* Verified Credit Balance Card */}
+        <div className="p-4 rounded-xl bg-gradient-to-r from-rose-950/40 to-black border border-rose-800/40 flex items-center justify-between">
+          <div>
+            <div className="text-[10px] font-mono uppercase tracking-wider text-rose-400 flex items-center gap-1.5 font-semibold">
+              <Zap className="w-3.5 h-3.5" />
+              <span>Cryptographic Credit Ledger</span>
+            </div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-extrabold font-mono text-white">
+                {(currentUser?.creditBalance ?? 500).toLocaleString()}
+              </span>
+              <span className="text-xs text-rose-300 font-mono">Credits Available</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                closeModal();
+                openModal('credits');
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/60 border border-rose-700/50 text-rose-200 text-xs font-medium transition-colors cursor-pointer"
+            >
+              Ledger Vault
+            </button>
+            <button
+              onClick={() => {
+                closeModal();
+                openModal('plans');
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-md transition-colors cursor-pointer"
+            >
+              Upgrade Plan
+            </button>
           </div>
         </div>
 

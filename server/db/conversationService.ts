@@ -325,4 +325,69 @@ export class ConversationService {
       now
     );
   }
+
+  /**
+   * Link file attachment to a conversation/message
+   */
+  static recordAttachment(params: {
+    conversationId: string;
+    messageId?: string;
+    fileId: string;
+    userId: string;
+  }) {
+    const id = `att_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      INSERT OR IGNORE INTO conversation_attachments (id, conversationId, messageId, fileId, userId, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      params.conversationId,
+      params.messageId || null,
+      params.fileId,
+      params.userId,
+      now
+    );
+  }
+
+  /**
+   * Record web research findings and verified sources
+   */
+  static recordResearch(params: {
+    userId: string;
+    conversationId: string;
+    messageId: string;
+    query: string;
+    sources: any[];
+  }) {
+    const id = `res_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO research_records (id, userId, conversationId, messageId, query, sourcesJson, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      params.userId,
+      params.conversationId,
+      params.messageId,
+      params.query,
+      JSON.stringify(params.sources),
+      now
+    );
+  }
+
+  /**
+   * Get attachments for a conversation
+   */
+  static getConversationAttachments(conversationId: string): any[] {
+    return db.prepare(`
+      SELECT ca.id, ca.fileId, ca.messageId, ca.createdAt,
+             f.originalName, f.fileSize, f.mimeType, f.status
+      FROM conversation_attachments ca
+      JOIN files f ON ca.fileId = f.id
+      WHERE ca.conversationId = ?
+    `).all(conversationId) as any[];
+  }
 }

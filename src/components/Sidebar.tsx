@@ -17,10 +17,12 @@ import {
   Sparkles,
   ChevronDown,
   ChevronRight,
-  ShieldCheck
+  ShieldCheck,
+  Zap,
+  CreditCard
 } from 'lucide-react';
 import { useWorkspace } from '../context/WorkspaceContext';
-import { WorkspaceMode } from '../types';
+import { WorkspaceMode, ActiveModal } from '../types';
 import { BrandLogo } from './BrandLogo';
 
 export const Sidebar: React.FC = () => {
@@ -42,7 +44,8 @@ export const Sidebar: React.FC = () => {
     renameConversation,
     deleteConversation,
     openModal,
-    userProfile
+    userProfile,
+    currentUser
   } = useWorkspace();
 
   const isOpen = isSidebarOpen || isMobileSidebarOpen;
@@ -84,10 +87,12 @@ export const Sidebar: React.FC = () => {
     handleClose();
   };
 
-  const handleOpenModal = (modal: 'models' | 'settings' | 'account') => {
+  const handleOpenModal = (modal: ActiveModal) => {
     openModal(modal);
     handleClose();
   };
+
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'owner';
 
   const handleStartRename = (id: string, currentTitle: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -332,11 +337,47 @@ export const Sidebar: React.FC = () => {
             </button>
           </div>
 
-          {/* SYSTEM SECTION */}
+          {/* SYSTEM & BILLING SECTION */}
           <div className="space-y-1">
             <div className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-rose-300/80 font-semibold">
-              System
+              System & Billing
             </div>
+
+            <button
+              onClick={() => handleOpenModal('credits')}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.04] transition-all"
+            >
+              <div className="flex items-center gap-2.5">
+                <Zap className="w-4 h-4 text-rose-400" />
+                <span>Credits & Ledger</span>
+              </div>
+              <span className="font-mono text-[11px] text-rose-300 font-bold">
+                {(currentUser?.creditBalance ?? 500).toLocaleString()} cr
+              </span>
+            </button>
+
+            <button
+              onClick={() => handleOpenModal('plans')}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.04] transition-all"
+            >
+              <CreditCard className="w-4 h-4 text-rose-400" />
+              <span>Subscription Plans</span>
+            </button>
+
+            {isAdmin && (
+              <button
+                onClick={() => handleOpenModal('admin')}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-amber-300 hover:text-white hover:bg-amber-950/30 border border-amber-900/30 transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <ShieldCheck className="w-4 h-4 text-amber-400" />
+                  <span>Admin Console</span>
+                </div>
+                <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800/40 text-amber-300">
+                  {currentUser?.role}
+                </span>
+              </button>
+            )}
 
             <button
               onClick={() => handleOpenModal('settings')}
@@ -365,7 +406,11 @@ export const Sidebar: React.FC = () => {
               </div>
               <div className="min-w-0">
                 <div className="text-xs font-medium text-white truncate">{userProfile.name}</div>
-                <div className="text-[10px] font-mono text-rose-400/80 truncate">{userProfile.plan}</div>
+                <div className="text-[10px] font-mono text-rose-400/80 truncate flex items-center gap-1">
+                  <span>{userProfile.plan}</span>
+                  <span>·</span>
+                  <span>{(currentUser?.creditBalance ?? 500).toLocaleString()} cr</span>
+                </div>
               </div>
             </div>
             <div className="p-1 rounded bg-rose-950/60 border border-rose-800/40 text-rose-400" title="Secure Core Online">

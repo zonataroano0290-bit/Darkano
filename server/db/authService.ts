@@ -6,6 +6,8 @@ export interface UserRow {
   email: string;
   passwordHash: string;
   salt: string;
+  role: 'user' | 'admin' | 'owner';
+  creditBalance: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -89,10 +91,15 @@ export class AuthService {
     const now = new Date().toISOString();
     const { hash, salt } = hashPassword(password);
 
+    // Determine initial role (configured admin emails become owner)
+    const adminEmails = (process.env.ADMIN_EMAILS || 'anotiktok42@gmail.com').toLowerCase().split(',').map(e => e.trim());
+    const initialRole: 'user' | 'owner' = adminEmails.includes(email) ? 'owner' : 'user';
+    const initialCredits = 500;
+
     // Insert user and profile
     const insertUser = db.prepare(`
-      INSERT INTO users (id, email, passwordHash, salt, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, email, passwordHash, salt, role, creditBalance, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertProfile = db.prepare(`
@@ -100,8 +107,29 @@ export class AuthService {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
-    insertUser.run(userId, email, hash, salt, now, now);
+    insertUser.run(userId, email, hash, salt, initialRole, initialCredits, now, now);
     insertProfile.run(profileId, userId, displayName, null, 'Developer', now, now);
+
+    // Record initial credit ledger transaction
+    try {
+      const grantTxId = `ctx_${crypto.randomUUID().replace(/-/g, '')}`;
+      db.prepare(`
+        INSERT INTO credit_transactions (id, userId, transactionId, type, amount, balanceAfter, source, metadataJson, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        grantTxId,
+        userId,
+        grantTxId,
+        'subscription_grant',
+        initialCredits,
+        initialCredits,
+        'signup_bonus',
+        JSON.stringify({ note: 'Initial Developer tier registration allowance' }),
+        now
+      );
+    } catch (grantErr: any) {
+      console.warn('[Darkano Auth] Notice recording signup credits:', grantErr?.message);
+    }
 
     // Create session immediately
     const session = this.createSession(userId);
@@ -113,6 +141,8 @@ export class AuthService {
         displayName,
         avatarUrl: null,
         plan: 'Developer',
+        role: initialRole,
+        creditBalance: initialCredits,
         createdAt: now
       },
       token: session.token,
@@ -132,7 +162,7 @@ export class AuthService {
     }
 
     const user = db.prepare(`
-      SELECT id, email, passwordHash, salt, createdAt FROM users WHERE email = ?
+      SELECT id, email, passwordHash, salt, role, creditBalance, createdAt FROM users WHERE email = ?
     `).get(email) as UserRow | undefined;
 
     // Generic error to prevent user enumeration
@@ -153,6 +183,8 @@ export class AuthService {
         displayName: profile?.displayName || email.split('@')[0],
         avatarUrl: profile?.avatarUrl || null,
         plan: profile?.plan || 'Developer',
+        role: (user.role || 'user') as 'user' | 'admin' | 'owner',
+        creditBalance: user.creditBalance ?? 500,
         createdAt: profile?.createdAt || user.createdAt
       },
       token: session.token,
@@ -185,7 +217,7 @@ export class AuthService {
     if (!token) return null;
 
     const session = db.prepare(`
-      SELECT s.id as sessionId, s.userId, s.expiresAt, u.email, p.displayName, p.avatarUrl, p.plan, p.createdAt
+      SELECT s.id as sessionId, s.userId, s.expiresAt, u.email, u.role, u.creditBalance, p.displayName, p.avatarUrl, p.plan, p.createdAt
       FROM sessions s
       JOIN users u ON s.userId = u.id
       LEFT JOIN profiles p ON s.userId = p.userId
@@ -195,6 +227,8 @@ export class AuthService {
       userId: string;
       expiresAt: string;
       email: string;
+      role: 'user' | 'admin' | 'owner' | null;
+      creditBalance: number | null;
       displayName: string | null;
       avatarUrl: string | null;
       plan: string | null;
@@ -216,6 +250,8 @@ export class AuthService {
       displayName: session.displayName || session.email.split('@')[0],
       avatarUrl: session.avatarUrl,
       plan: session.plan || 'Developer',
+      role: (session.role || 'user') as 'user' | 'admin' | 'owner',
+      creditBalance: session.creditBalance ?? 500,
       createdAt: session.createdAt
     };
   }
@@ -295,7 +331,13 @@ export class AuthService {
    * Get user profile and usage
    */
   static getProfile(userId: string) {
-    const user = db.prepare('SELECT id, email, createdAt FROM users WHERE id = ?').get(userId) as { id: string; email: string; createdAt: string } | undefined;
+    const user = db.prepare('SELECT id, email, role, creditBalance, createdAt FROM users WHERE id = ?').get(userId) as {
+      id: string;
+      email: string;
+      role: 'user' | 'admin' | 'owner' | null;
+      creditBalance: number | null;
+      createdAt: string;
+    } | undefined;
     if (!user) return null;
 
     const profile = db.prepare('SELECT displayName, avatarUrl, plan, createdAt, updatedAt FROM profiles WHERE userId = ?').get(userId) as {
@@ -321,6 +363,8 @@ export class AuthService {
       displayName: profile?.displayName || user.email.split('@')[0],
       avatarUrl: profile?.avatarUrl || null,
       plan: profile?.plan || 'Developer',
+      role: (user.role || 'user') as 'user' | 'admin' | 'owner',
+      creditBalance: user.creditBalance ?? 500,
       createdAt: profile?.createdAt || user.createdAt,
       quota: {
         tokensUsed: usage.totalTokens,

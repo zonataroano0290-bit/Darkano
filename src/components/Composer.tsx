@@ -79,7 +79,23 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
     analyze: { label: 'Analyze', icon: BarChart3, color: 'text-amber-400' }
   };
 
-  const canSubmit = (input.trim().length > 0 || stagedComposerFiles.length > 0) && !isGenerating;
+  const canSubmit =
+    (input.trim().length > 0 || stagedComposerFiles.some(f => f.status === 'ready')) &&
+    !isGenerating &&
+    !stagedComposerFiles.some(f => f.status === 'uploading');
+
+  const getPlaceholder = () => {
+    switch (activeMode) {
+      case 'research':
+        return 'Ask Darkano to research live sources, verify citations, and analyze web data...';
+      case 'analyze':
+        return 'Ask Darkano to parse and analyze staged files, extract metrics, or inspect code...';
+      case 'code':
+        return 'Ask Darkano to engineer algorithms, analyze repos, or generate production code...';
+      default:
+        return 'Ask Darkano anything...';
+    }
+  };
 
   return (
     <div className={`w-full ${isCentered ? 'max-w-3xl mx-auto' : 'max-w-4xl mx-auto'}`}>
@@ -99,12 +115,31 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
           {stagedComposerFiles.map(file => (
             <div
               key={file.id}
-              className="flex items-center gap-2 pl-2.5 pr-1.5 py-1 rounded-lg bg-rose-950/40 border border-rose-800/40 text-xs text-rose-200 shadow-sm"
+              className={`flex items-center gap-2 pl-2.5 pr-1.5 py-1 rounded-lg border text-xs shadow-sm ${
+                file.status === 'error'
+                  ? 'bg-red-950/40 border-red-800/50 text-red-200'
+                  : file.status === 'uploading'
+                  ? 'bg-rose-950/20 border-rose-800/30 text-rose-300'
+                  : 'bg-rose-950/40 border-rose-800/40 text-rose-200'
+              }`}
             >
-              <FileText className="w-3.5 h-3.5 text-rose-400" />
+              <FileText className="w-3.5 h-3.5 text-rose-400 shrink-0" />
               <span className="font-mono text-[11px] truncate max-w-[140px] sm:max-w-[200px]">
                 {file.name}
               </span>
+              {file.status === 'uploading' ? (
+                <span className="text-[10px] font-mono text-rose-400 animate-pulse font-semibold">
+                  {file.progress}%
+                </span>
+              ) : file.status === 'error' ? (
+                <span className="text-[10px] font-mono text-red-400 font-semibold" title={file.processingError}>
+                  Failed
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono text-slate-400">
+                  {(file.size / 1024).toFixed(0)} KB
+                </span>
+              )}
               <button
                 onClick={() => unstageComposerFile(file.id)}
                 className="p-0.5 text-slate-400 hover:text-rose-300 rounded transition-colors"
@@ -126,7 +161,7 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={1}
-          placeholder="Ask Darkano anything..."
+          placeholder={getPlaceholder()}
           className="w-full pt-4 pb-2 px-4 sm:px-5 bg-transparent text-sm sm:text-base text-slate-100 placeholder-slate-400 focus:outline-none resize-none min-h-[56px] max-h-[200px] leading-relaxed"
           id="composer-textarea"
         />

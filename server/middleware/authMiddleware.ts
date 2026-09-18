@@ -7,6 +7,8 @@ export interface AuthenticatedUser {
   displayName: string;
   avatarUrl: string | null;
   plan: string;
+  role: 'user' | 'admin' | 'owner';
+  creditBalance: number;
   createdAt: string;
 }
 
@@ -66,6 +68,19 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
   req.user = user;
   next();
+}
+
+export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  requireAuth(req, res, () => {
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'owner')) {
+      res.status(403).json({
+        error: 'Forbidden. Administrator privileges required.',
+        code: 'FORBIDDEN'
+      });
+      return;
+    }
+    next();
+  });
 }
 
 export function optionalAuth(req: Request, res: Response, next: NextFunction): void {
