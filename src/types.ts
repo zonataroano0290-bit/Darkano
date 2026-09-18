@@ -1,4 +1,123 @@
-export type WorkspaceMode = 'chat' | 'code' | 'research' | 'analyze';
+export type WorkspaceMode = 'chat' | 'code' | 'research' | 'analyze' | 'agent';
+
+export type AgentTaskStatus =
+  | 'queued'
+  | 'planning'
+  | 'running'
+  | 'waiting_for_tool'
+  | 'waiting_for_approval'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type AgentStepStatus =
+  | 'pending'
+  | 'running'
+  | 'waiting_for_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'skipped';
+
+export interface PlannedStep {
+  sequence: number;
+  action: string;
+  tool?: string;
+  input?: any;
+  description?: string;
+  requiresApproval?: boolean;
+}
+
+export interface AgentTaskStep {
+  id: string;
+  taskId: string;
+  sequence: number;
+  action: string;
+  tool?: string;
+  input?: any;
+  output?: any;
+  status: AgentStepStatus;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface AgentTask {
+  id: string;
+  userId: string;
+  conversationId?: string;
+  originalPrompt: string;
+  status: AgentTaskStatus;
+  plan?: PlannedStep[];
+  currentStep: number;
+  totalSteps: number;
+  result?: string;
+  error?: string;
+  requiresApproval?: boolean;
+  pendingApprovalAction?: {
+    stepId: string;
+    tool: string;
+    action: string;
+    input: any;
+  } | null;
+  modelId?: string;
+  creditsUsed: number;
+  steps?: AgentTaskStep[];
+  citations?: Citation[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface ToolExecutionItem {
+  id: string;
+  taskId?: string;
+  stepId?: string;
+  userId: string;
+  toolName: string;
+  input?: any;
+  output?: any;
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+  error?: string;
+  duration: number;
+  creditsUsed: number;
+  createdAt: string;
+}
+
+export interface ModelCapabilityMatrix {
+  text: boolean;
+  vision: boolean;
+  image_generation: boolean;
+  image_editing: boolean;
+  audio_input: boolean;
+  audio_output: boolean;
+  speech_to_text: boolean;
+  text_to_speech: boolean;
+  video_input: boolean;
+  long_context: boolean;
+}
+
+export interface MediaItem {
+  id: string;
+  userId: string;
+  conversationId?: string | null;
+  messageId?: string | null;
+  type: 'image' | 'audio' | 'generated_image' | 'edited_image' | 'tts_audio';
+  mimeType: string;
+  storagePath: string;
+  fileUrl: string;
+  provider?: string | null;
+  model?: string | null;
+  prompt?: string | null;
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+  status: 'ready' | 'processing' | 'failed' | 'deleted';
+  error?: string | null;
+  metadataJson?: string | null;
+  createdAt: string;
+}
 
 export interface AIModel {
   id: string;
@@ -10,6 +129,7 @@ export interface AIModel {
   maxOutputTokens: string;
   latencyTier: 'Ultra Fast' | 'Fast' | 'Balanced' | 'Deep Think';
   capabilities: string[];
+  capabilityMatrix?: ModelCapabilityMatrix;
   isFlagship?: boolean;
   accentColor: string;
   isAvailable?: boolean;
@@ -69,12 +189,17 @@ export interface ChatMessage {
   mode: WorkspaceMode;
   modelId?: string;
   attachedFiles?: UploadedFile[];
+  mediaAttachments?: MediaItem[];
   sources?: ResearchSource[];
   citations?: Citation[];
   currentStage?: string;
+  agentTaskId?: string;
+  agentTask?: AgentTask;
   status?: 'ready' | 'loading' | 'streaming' | 'error' | 'stopped';
   errorMessage?: string;
   metrics?: ChatMessageMetrics;
+  ttsAudioUrl?: string;
+  isSynthesizingTts?: boolean;
 }
 
 export interface Conversation {

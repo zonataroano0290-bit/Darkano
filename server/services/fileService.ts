@@ -340,6 +340,17 @@ export class FileService {
   }
 
   /**
+   * Get file buffer for analysis or multimodal processing
+   */
+  static getFileBuffer(userId: string, fileId: string): Buffer | null {
+    const file = this.getFile(userId, fileId);
+    if (!file || !file.storagePath || !fs.existsSync(file.storagePath)) {
+      return null;
+    }
+    return fs.readFileSync(file.storagePath);
+  }
+
+  /**
    * Get user storage total
    */
   static getUserStorageUsage(userId: string): { totalBytes: number; fileCount: number } {

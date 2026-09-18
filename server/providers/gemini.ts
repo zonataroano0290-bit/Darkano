@@ -47,7 +47,19 @@ export class GeminiProvider extends BaseAIProvider {
         contextWindow: '1M tokens',
         maxOutputTokens: '8k tokens',
         latencyTier: 'Ultra Fast',
-        capabilities: ['Sub-second Response', '1M Context', 'Deep Multimodal', 'Zero-Latency Routing'],
+        capabilities: ['Sub-second Response', '1M Context', 'Vision & Audio', 'Zero-Latency Routing'],
+        capabilityMatrix: {
+          text: true,
+          vision: true,
+          image_generation: false,
+          image_editing: false,
+          audio_input: true,
+          audio_output: false,
+          speech_to_text: true,
+          text_to_speech: false,
+          video_input: true,
+          long_context: true
+        },
         isAvailable: available,
         streamingSupported: true,
         accentColor: '#38bdf8'
@@ -62,9 +74,73 @@ export class GeminiProvider extends BaseAIProvider {
         maxOutputTokens: '8k tokens',
         latencyTier: 'Balanced',
         capabilities: ['Multimodal Native', 'Video & Audio', 'Complex Documents', 'High Factuality'],
+        capabilityMatrix: {
+          text: true,
+          vision: true,
+          image_generation: false,
+          image_editing: false,
+          audio_input: true,
+          audio_output: false,
+          speech_to_text: true,
+          text_to_speech: false,
+          video_input: true,
+          long_context: true
+        },
         isAvailable: available,
         streamingSupported: true,
         accentColor: '#818cf8'
+      },
+      {
+        id: 'gemini-3.1-flash-lite-image',
+        name: 'Nano Banana Lite (Image Gen)',
+        provider: 'Google',
+        category: 'fast',
+        description: 'Frontier multimodal image synthesis model supporting high-speed visual generation and conversational image editing.',
+        contextWindow: '32k tokens',
+        maxOutputTokens: '4k tokens',
+        latencyTier: 'Fast',
+        capabilities: ['Image Generation', 'Image Editing', 'Multi-Aspect Ratio', 'Visual Synthesis'],
+        capabilityMatrix: {
+          text: false,
+          vision: true,
+          image_generation: true,
+          image_editing: true,
+          audio_input: false,
+          audio_output: false,
+          speech_to_text: false,
+          text_to_speech: false,
+          video_input: false,
+          long_context: false
+        },
+        isAvailable: available,
+        streamingSupported: false,
+        accentColor: '#f59e0b'
+      },
+      {
+        id: 'gemini-3.1-flash-tts-preview',
+        name: 'Gemini Flash Audio TTS',
+        provider: 'Google',
+        category: 'fast',
+        description: 'Specialized low-latency neural speech generation engine supporting high-fidelity expressive voice synthesis.',
+        contextWindow: '16k tokens',
+        maxOutputTokens: '2k tokens',
+        latencyTier: 'Ultra Fast',
+        capabilities: ['Text-to-Speech', '24kHz Audio', 'Expressive Prosody', 'Neural Voices'],
+        capabilityMatrix: {
+          text: false,
+          vision: false,
+          image_generation: false,
+          image_editing: false,
+          audio_input: false,
+          audio_output: true,
+          speech_to_text: false,
+          text_to_speech: true,
+          video_input: false,
+          long_context: false
+        },
+        isAvailable: available,
+        streamingSupported: false,
+        accentColor: '#ec4899'
       }
     ];
   }

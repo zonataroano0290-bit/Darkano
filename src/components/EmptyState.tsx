@@ -6,9 +6,9 @@ export const EmptyState: React.FC = () => {
   const { sendMessage, activeMode } = useWorkspace();
 
   const samplePrompts = [
+    { label: 'Autonomous Multi-Step Research', prompt: 'Research recent breakthroughs in photonic quantum computing, verify source claims, and synthesize a structured analysis.' },
     { label: 'Write a high-performance LRU cache', prompt: 'Write a production-ready, high-performance thread-safe LRU cache in TypeScript with O(1) ops.' },
-    { label: 'Analyze distributed consensus', prompt: 'Explain the core architectural trade-offs between Raft, Paxos, and Zab in distributed systems.' },
-    { label: 'Deep research on transformer attention', prompt: 'Provide an in-depth architectural breakdown of FlashAttention-3 and hardware-level memory tiling.' }
+    { label: 'Analyze distributed consensus', prompt: 'Explain the core architectural trade-offs between Raft, Paxos, and Zab in distributed systems.' }
   ];
 
   return (

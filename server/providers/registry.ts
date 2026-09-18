@@ -50,6 +50,18 @@ export class ProviderRegistry {
         maxOutputTokens: '64k tokens',
         latencyTier: 'Deep Think',
         capabilities: ['Hybrid Reasoning', 'Long Output Generation', 'Agentic Execution', 'Nuance'],
+        capabilityMatrix: {
+          text: true,
+          vision: true,
+          image_generation: false,
+          image_editing: false,
+          audio_input: false,
+          audio_output: false,
+          speech_to_text: false,
+          text_to_speech: false,
+          video_input: false,
+          long_context: true
+        },
         isAvailable: hasAnthropic,
         streamingSupported: true,
         accentColor: '#d97706'
@@ -64,6 +76,18 @@ export class ProviderRegistry {
         maxOutputTokens: '16k tokens',
         latencyTier: 'Fast',
         capabilities: ['Omni Modality', 'Structured JSON', 'Function Calling', 'Instruction Following'],
+        capabilityMatrix: {
+          text: true,
+          vision: true,
+          image_generation: false,
+          image_editing: false,
+          audio_input: true,
+          audio_output: false,
+          speech_to_text: true,
+          text_to_speech: false,
+          video_input: true,
+          long_context: true
+        },
         isAvailable: hasOpenAI,
         streamingSupported: true,
         accentColor: '#10a37f'
@@ -78,6 +102,18 @@ export class ProviderRegistry {
         maxOutputTokens: '8k tokens',
         latencyTier: 'Deep Think',
         capabilities: ['Chain-of-Thought', 'Formal Verification', 'Math Competition', 'Logic Puzzles'],
+        capabilityMatrix: {
+          text: true,
+          vision: false,
+          image_generation: false,
+          image_editing: false,
+          audio_input: false,
+          audio_output: false,
+          speech_to_text: false,
+          text_to_speech: false,
+          video_input: false,
+          long_context: false
+        },
         isAvailable: hasDeepSeek,
         streamingSupported: true,
         accentColor: '#6366f1'
@@ -92,6 +128,18 @@ export class ProviderRegistry {
         maxOutputTokens: '8k tokens',
         latencyTier: 'Balanced',
         capabilities: ['Private Hostable', 'Enterprise Tooling', 'Multilingual', 'Cost Optimized'],
+        capabilityMatrix: {
+          text: true,
+          vision: false,
+          image_generation: false,
+          image_editing: false,
+          audio_input: false,
+          audio_output: false,
+          speech_to_text: false,
+          text_to_speech: false,
+          video_input: false,
+          long_context: true
+        },
         isAvailable: false,
         streamingSupported: true,
         accentColor: '#0ea5e9'

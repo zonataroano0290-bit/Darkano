@@ -14,20 +14,37 @@ import {
   BarChart3,
   Trash2,
   Globe,
-  ExternalLink
+  ExternalLink,
+  Volume2,
+  RefreshCw,
+  Image as ImageIcon
 } from 'lucide-react';
-import { ChatMessage, WorkspaceMode } from '../types';
+import { ChatMessage, WorkspaceMode, MediaItem } from '../types';
 import { useWorkspace } from '../context/WorkspaceContext';
+import { AgentTaskCard } from './AgentTaskCard';
+import { AudioPlayerInline } from './AudioPlayerInline';
 
 interface MessageItemProps {
   message: ChatMessage;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
-  const { userProfile, regenerateMessage, deleteMessage, models } = useWorkspace();
+  const {
+    userProfile,
+    regenerateMessage,
+    deleteMessage,
+    models,
+    approveTaskStep,
+    cancelAgentTask,
+    retryAgentTask,
+    setActiveLightboxImage,
+    synthesizeSpeechAction
+  } = useWorkspace();
   const [copied, setCopied] = useState(false);
   const [copiedCodeIndex, setCopiedCodeIndex] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<'like' | 'dislike' | null>(null);
+  const [isSynthesizingTTS, setIsSynthesizingTTS] = useState(false);
+  const [ttsAudioUrl, setTtsAudioUrl] = useState<string | null>(message.ttsAudioUrl || null);
 
   const isUser = message.role === 'user';
   const modelInfo = models.find(m => m.id === message.modelId);
@@ -42,6 +59,23 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
     navigator.clipboard.writeText(codeText);
     setCopiedCodeIndex(index);
     setTimeout(() => setCopiedCodeIndex(null), 2000);
+  };
+
+  const handleSynthesizeTTS = async () => {
+    if (isSynthesizingTTS || !message.content) return;
+    if (ttsAudioUrl) {
+      // Toggle or replay
+      return;
+    }
+    setIsSynthesizingTTS(true);
+    try {
+      const result = await synthesizeSpeechAction(message.content.slice(0, 1500), 'Kore', message.id);
+      setTtsAudioUrl(result.audioUrl);
+    } catch (err) {
+      console.error('Speech synthesis error:', err);
+    } finally {
+      setIsSynthesizingTTS(false);
+    }
   };
 
   // Helper to render markdown-like content (code blocks, headers, lists, bold)
@@ -274,8 +308,53 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
             </div>
           )}
 
+          {/* Phase 8 Multimodal: Media Attachments (Images, Audio) */}
+          {message.mediaAttachments && message.mediaAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-2.5 mb-3">
+              {message.mediaAttachments.map(media => {
+                if (media.type === 'audio' || media.mimeType.startsWith('audio/')) {
+                  return (
+                    <div key={media.id} className="w-full">
+                      <AudioPlayerInline
+                        audioUrl={media.fileUrl}
+                        title={media.prompt || 'Audio Voice Recording'}
+                      />
+                    </div>
+                  );
+                }
+                return (
+                  <div
+                    key={media.id}
+                    className="group/img relative rounded-xl overflow-hidden border border-neutral-800 bg-black cursor-pointer hover:border-amber-500/50 transition-all max-w-[240px]"
+                    onClick={() => setActiveLightboxImage(media)}
+                  >
+                    <img
+                      src={media.fileUrl}
+                      alt={media.prompt || 'Visual Asset'}
+                      className="w-full h-36 object-cover transition-transform duration-200 group-hover/img:scale-105"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover/img:opacity-100 transition-opacity p-2 flex flex-col justify-end">
+                      <p className="text-[11px] text-white font-medium truncate">{media.prompt || 'Visual Asset'}</p>
+                      <span className="text-[9px] text-amber-400 font-mono">Click to expand</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Phase 7: Real Agent Multi-Step Task Execution Card */}
+          {message.agentTask && (
+            <AgentTaskCard
+              task={message.agentTask}
+              onApprove={approveTaskStep}
+              onCancel={cancelAgentTask}
+              onRetry={retryAgentTask}
+            />
+          )}
+
           {/* Real Pipeline Stage Indicator */}
-          {message.currentStage && (
+          {message.currentStage && !message.agentTask && (
             <div className="flex items-center gap-2 px-3 py-1.5 mb-2.5 rounded-xl bg-rose-950/30 border border-rose-800/40 text-rose-300 font-mono text-xs animate-pulse">
               <Compass className="w-3.5 h-3.5 text-rose-400 animate-spin" />
               <span>{message.currentStage}</span>
@@ -332,6 +411,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
               {message.status === 'stopped' && (
                 <div className="mt-2 text-[10px] font-mono text-amber-400/80 italic flex items-center gap-1">
                   <span>[Generation stopped by user]</span>
+                </div>
+              )}
+              {/* TTS Speech Synthesis Audio Player if synthesized */}
+              {ttsAudioUrl && (
+                <div className="mt-3">
+                  <AudioPlayerInline
+                    audioUrl={ttsAudioUrl}
+                    voiceName="Kore"
+                    title="Assistant Speech Synthesis"
+                    autoPlay={true}
+                  />
                 </div>
               )}
             </div>
@@ -396,8 +486,25 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
                 )}
               </div>
 
-              {/* Feedback Buttons */}
+              {/* Feedback & Speech Buttons */}
               <div className="flex items-center gap-1.5">
+                <button
+                  id={`tts-btn-${message.id}`}
+                  onClick={handleSynthesizeTTS}
+                  disabled={isSynthesizingTTS}
+                  className={`p-1 rounded transition-colors cursor-pointer ${
+                    ttsAudioUrl
+                      ? 'text-purple-400 bg-purple-500/10'
+                      : 'text-slate-400 hover:text-purple-300 hover:bg-white/5'
+                  }`}
+                  title="Read aloud (Text-to-Speech)"
+                >
+                  {isSynthesizingTTS ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
                 <button
                   onClick={() => setFeedback(feedback === 'like' ? null : 'like')}
                   className={`p-1 rounded hover:bg-white/5 transition-colors cursor-pointer ${

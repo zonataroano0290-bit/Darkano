@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { FileService, FileRecord, FileMetadata } from './fileService.js';
+import { MediaService } from './mediaService.js';
 
 export interface PreparedDocumentContext {
   formattedContextText: string;
@@ -28,23 +29,59 @@ export interface PreparedDocumentContext {
 
 export class DocumentContextManager {
   /**
-   * Prepares document context for a user's query and attached files.
+   * Prepares document context for a user's query, attached files, and media items.
    * Enforces strict user ownership, prompt injection defense, and token limits.
    */
   static prepareContext(
     userId: string,
     fileIds: string[],
     userQuery: string,
-    maxContextChars: number = 32000
+    maxContextChars: number = 32000,
+    mediaIds?: string[]
   ): PreparedDocumentContext {
     const multimodalParts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
     const attachedFilesInfo: PreparedDocumentContext['attachedFilesInfo'] = [];
     const availableCitations: PreparedDocumentContext['availableCitations'] = [];
     const contextSections: string[] = [];
 
+    // Process media items if provided
+    if (mediaIds && mediaIds.length > 0) {
+      for (const mid of mediaIds) {
+        try {
+          const media = MediaService.getMedia(userId, mid);
+          if (!media) continue;
+
+          const data = MediaService.getMediaBuffer(userId, mid);
+          if (!data) continue;
+
+          multimodalParts.push({
+            inlineData: {
+              mimeType: data.mimeType,
+              data: data.buffer.toString('base64')
+            }
+          });
+
+          attachedFilesInfo.push({
+            id: media.id,
+            name: `${media.type}_${media.id}`,
+            size: data.buffer.length,
+            mimeType: data.mimeType
+          });
+
+          contextSections.push(
+            `<media_context id="${media.id}" type="${media.type}" mime="${data.mimeType}">\n` +
+            `[User provided media: ${media.type}, Format: ${data.mimeType}, Size: ${data.buffer.length} bytes]\n` +
+            `</media_context>`
+          );
+        } catch (mErr: any) {
+          console.warn(`[Darkano DocumentContext] Failed to load media ${mid}:`, mErr?.message);
+        }
+      }
+    }
+
     if (!fileIds || fileIds.length === 0) {
       return {
-        formattedContextText: '',
+        formattedContextText: contextSections.join('\n\n'),
         multimodalParts,
         attachedFilesInfo,
         availableCitations
@@ -62,7 +99,7 @@ export class DocumentContextManager {
 
     if (validFiles.length === 0) {
       return {
-        formattedContextText: '',
+        formattedContextText: contextSections.join('\n\n'),
         multimodalParts,
         attachedFilesInfo,
         availableCitations
@@ -115,6 +152,30 @@ export class DocumentContextManager {
           }
         } catch (imgErr: any) {
           console.warn(`[Darkano DocumentContext] Failed to read image ${file.originalName}:`, imgErr?.message);
+        }
+        continue;
+      }
+
+      // Handle audio files for multimodal inspection / listening
+      if (file.mimeType.startsWith('audio/')) {
+        try {
+          if (fs.existsSync(file.storagePath)) {
+            const audioBuffer = fs.readFileSync(file.storagePath);
+            const base64Data = audioBuffer.toString('base64');
+            multimodalParts.push({
+              inlineData: {
+                mimeType: file.mimeType || 'audio/wav',
+                data: base64Data
+              }
+            });
+            contextSections.push(
+              `<document_context file_id="${file.id}" filename="${file.originalName}" type="${file.mimeType}">\n` +
+              `[Audio recording provided as inline audio data: ${file.originalName}, Size: ${file.fileSize} bytes]\n` +
+              `</document_context>`
+            );
+          }
+        } catch (audErr: any) {
+          console.warn(`[Darkano DocumentContext] Failed to read audio ${file.originalName}:`, audErr?.message);
         }
         continue;
       }

@@ -16,6 +16,9 @@ import { CreditsModal } from './components/CreditsModal';
 import { PlansModal } from './components/PlansModal';
 import { AdminModal } from './components/AdminModal';
 import { AuthScreen } from './components/AuthScreen';
+import { ImageLightboxModal } from './components/ImageLightboxModal';
+import { ImageGenerationModal } from './components/ImageGenerationModal';
+import { VoiceChatModal } from './components/VoiceChatModal';
 import { Shield } from 'lucide-react';
 
 const DarkanoAppContent: React.FC = () => {
@@ -27,7 +30,13 @@ const DarkanoAppContent: React.FC = () => {
     forgotPassword,
     resetPassword,
     authError,
-    clearAuthError
+    clearAuthError,
+    activeLightboxImage,
+    setActiveLightboxImage,
+    isImageGenModalOpen,
+    setImageGenModalOpen,
+    isVoiceChatModalOpen,
+    setVoiceChatModalOpen
   } = useWorkspace();
 
   // Loading state while restoring session from secure token
@@ -86,6 +95,18 @@ const DarkanoAppContent: React.FC = () => {
       <CreditsModal />
       <PlansModal />
       <AdminModal />
+      <ImageLightboxModal
+        media={activeLightboxImage}
+        onClose={() => setActiveLightboxImage(null)}
+      />
+      <ImageGenerationModal
+        isOpen={isImageGenModalOpen}
+        onClose={() => setImageGenModalOpen(false)}
+      />
+      <VoiceChatModal
+        isOpen={isVoiceChatModalOpen}
+        onClose={() => setVoiceChatModalOpen(false)}
+      />
     </div>
   );
 };

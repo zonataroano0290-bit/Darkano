@@ -26,6 +26,7 @@ export const ModelsModal: React.FC = () => {
 
   const categories = [
     { id: 'all', label: 'All Models' },
+    { id: 'multimodal', label: 'Multimodal & Vision' },
     { id: 'flagship', label: 'Flagship Reasoning' },
     { id: 'fast', label: 'Ultra Fast' },
     { id: 'coding', label: 'Coding & AST' },
@@ -40,6 +41,7 @@ export const ModelsModal: React.FC = () => {
 
     const matchesCategory =
       selectedCategory === 'all' ||
+      (selectedCategory === 'multimodal' && (m.capabilityMatrix?.vision || m.capabilityMatrix?.image_generation || m.capabilityMatrix?.audio_input)) ||
       (selectedCategory === 'flagship' && (m.category === 'flagship' || m.category === 'reasoning')) ||
       m.category === selectedCategory;
 
@@ -205,6 +207,26 @@ export const ModelsModal: React.FC = () => {
 
                         {/* Capability Tags */}
                         <div className="flex flex-wrap gap-1.5 mt-2.5">
+                          {model.capabilityMatrix?.vision && (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/40 text-emerald-300 border border-emerald-600/30">
+                              Vision Analysis
+                            </span>
+                          )}
+                          {model.capabilityMatrix?.image_generation && (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/40 text-amber-300 border border-amber-600/30">
+                              Image Generation
+                            </span>
+                          )}
+                          {model.capabilityMatrix?.audio_input && (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/40 text-purple-300 border border-purple-600/30">
+                              Audio In (STT)
+                            </span>
+                          )}
+                          {model.capabilityMatrix?.audio_output && (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/40 text-indigo-300 border border-indigo-600/30">
+                              Voice TTS
+                            </span>
+                          )}
                           {model.capabilities.map(cap => (
                             <span
                               key={cap}

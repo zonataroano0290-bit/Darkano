@@ -10,7 +10,8 @@ import {
   ActiveModal,
   SettingsTab,
   ViewSection,
-  AuthUser
+  AuthUser,
+  MediaItem
 } from '../types';
 import { AI_MODELS, DEFAULT_MODEL_ID } from '../data/models';
 
@@ -57,7 +58,7 @@ interface WorkspaceContextType {
 
   // Active Chat State & Messages
   messages: ChatMessage[];
-  sendMessage: (content: string, files?: UploadedFile[]) => void;
+  sendMessage: (content: string, files?: UploadedFile[], media?: MediaItem[]) => void;
   regenerateMessage: (messageId: string) => void;
   deleteMessage: (messageId: string) => void;
   isLoading: boolean;
@@ -81,6 +82,25 @@ interface WorkspaceContextType {
   activePreviewFile: UploadedFile | null;
   setActivePreviewFile: (file: UploadedFile | null) => void;
 
+  // Phase 8 Multimodal Media Management
+  stagedMedia: MediaItem[];
+  stageMedia: (media: MediaItem) => void;
+  unstageMedia: (mediaId: string) => void;
+  clearStagedMedia: () => void;
+  userMedia: MediaItem[];
+  loadUserMedia: () => Promise<void>;
+  uploadMediaBlob: (blob: Blob, mimeType: string, type?: 'image' | 'audio') => Promise<MediaItem>;
+  generateImageAction: (prompt: string, aspectRatio?: string) => Promise<MediaItem>;
+  editImageAction: (sourceMediaId: string, prompt: string) => Promise<MediaItem>;
+  transcribeAudioAction: (audioBlob: Blob, prompt?: string) => Promise<{ transcript: string; mediaRecord: MediaItem }>;
+  synthesizeSpeechAction: (text: string, voiceName?: string, messageId?: string) => Promise<{ audioUrl: string; base64Audio: string }>;
+  activeLightboxImage: MediaItem | null;
+  setActiveLightboxImage: (media: MediaItem | null) => void;
+  isImageGenModalOpen: boolean;
+  setImageGenModalOpen: (open: boolean) => void;
+  isVoiceChatModalOpen: boolean;
+  setVoiceChatModalOpen: (open: boolean) => void;
+
   // User Profile & Settings
   userProfile: UserProfile;
   setUserProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
@@ -99,6 +119,11 @@ interface WorkspaceContextType {
   isMobileSidebarOpen: boolean;
   toggleMobileSidebar: () => void;
   setMobileSidebarOpen: (open: boolean) => void;
+
+  // Agent Task Control
+  approveTaskStep: (taskId: string) => Promise<boolean>;
+  cancelAgentTask: (taskId: string) => Promise<boolean>;
+  retryAgentTask: (taskId: string) => Promise<boolean>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
@@ -206,6 +231,13 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [stagedComposerFiles, setStagedComposerFiles] = useState<UploadedFile[]>([]);
   const [activePreviewFile, setActivePreviewFile] = useState<UploadedFile | null>(null);
+
+  // Multimodal Media
+  const [stagedMedia, setStagedMedia] = useState<MediaItem[]>([]);
+  const [userMedia, setUserMedia] = useState<MediaItem[]>([]);
+  const [activeLightboxImage, setActiveLightboxImage] = useState<MediaItem | null>(null);
+  const [isImageGenModalOpen, setImageGenModalOpen] = useState(false);
+  const [isVoiceChatModalOpen, setVoiceChatModalOpen] = useState(false);
 
   const clearAuthError = () => setAuthError(null);
 
@@ -834,9 +866,13 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   // Send Message with Real Backend Streaming & Database Storage
-  const sendMessage = async (content: string, filesToAttach: UploadedFile[] = stagedComposerFiles) => {
+  const sendMessage = async (
+    content: string,
+    filesToAttach: UploadedFile[] = stagedComposerFiles,
+    mediaToAttach: MediaItem[] = stagedMedia
+  ) => {
     const trimmed = content.trim();
-    if (!trimmed && filesToAttach.length === 0) return;
+    if (!trimmed && filesToAttach.length === 0 && mediaToAttach.length === 0) return;
 
     if (trimmed.length > 32000) {
       setErrorState('Message exceeds the maximum limit of 32,000 characters.');
@@ -846,6 +882,21 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (selectedModel.isAvailable === false) {
       setErrorState(`Model '${selectedModel.name}' (${selectedModel.provider}) is not configured on this server. Please select an available model.`);
       return;
+    }
+
+    // Strict capability validation for attached media
+    if (mediaToAttach.length > 0 && selectedModel.capabilityMatrix) {
+      const hasImages = mediaToAttach.some(m => m.type === 'image' || m.type === 'generated_image' || m.mimeType.startsWith('image/'));
+      const hasAudios = mediaToAttach.some(m => m.type === 'audio' || m.mimeType.startsWith('audio/'));
+
+      if (hasImages && !selectedModel.capabilityMatrix.vision) {
+        setErrorState(`Model '${selectedModel.name}' does not support Vision/Image analysis. Please select a vision-capable model (such as Gemini 3.8 Flash or Gemini 2.5 Pro).`);
+        return;
+      }
+      if (hasAudios && !selectedModel.capabilityMatrix.audio_input) {
+        setErrorState(`Model '${selectedModel.name}' does not support direct audio input. Please select an audio-capable model.`);
+        return;
+      }
     }
 
     clearError();
@@ -866,6 +917,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       mode: activeMode,
       modelId: selectedModelId,
       attachedFiles: filesToAttach.length > 0 ? [...filesToAttach] : undefined,
+      mediaAttachments: mediaToAttach.length > 0 ? [...mediaToAttach] : undefined,
       status: 'ready'
     };
 
@@ -882,7 +934,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const isFirst = existingMessages.length === 0;
     const autoTitle = isFirst
-      ? trimmed.slice(0, 40) + (trimmed.length > 40 ? '...' : '')
+      ? (trimmed ? trimmed.slice(0, 40) + (trimmed.length > 40 ? '...' : '') : 'Visual Analysis Session')
       : (currentConv?.title || 'New Session');
 
     setConversations(prev =>
@@ -900,6 +952,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     );
 
     setStagedComposerFiles([]);
+    setStagedMedia([]);
     setIsGenerating(true);
     setIsLoading(true);
 
@@ -915,6 +968,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     try {
       const fileIdsPayload = filesToAttach.map(f => f.id).filter(id => !id.startsWith('temp_'));
+      const mediaIdsPayload = mediaToAttach.map(m => m.id);
 
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
@@ -925,6 +979,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           model: selectedModelId,
           mode: activeMode,
           fileIds: fileIdsPayload,
+          mediaIds: mediaIdsPayload,
           history: historyPayload,
           options: {
             temperature: settings.chat.temperature,
@@ -983,7 +1038,86 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
             if (eventType === 'stage') {
               let stageLabel = '';
-              if (parsed.stage === 'searching') {
+              let agentUpdater: ((prev: any) => any) | null = null;
+
+              if (parsed.stage === 'planning') {
+                stageLabel = 'Agent formulating execution plan...';
+              } else if (parsed.stage === 'plan_created') {
+                stageLabel = `Plan formulated: ${parsed.totalSteps || (parsed.plan?.length ?? 0)} steps scheduled`;
+                agentUpdater = (prev: any) => ({
+                  ...(prev || {}),
+                  id: parsed.taskId,
+                  status: 'running',
+                  plan: parsed.plan,
+                  totalSteps: parsed.totalSteps || parsed.plan?.length || 0,
+                  currentStep: 0,
+                  creditsUsed: 0,
+                  steps: (parsed.plan || []).map((p: any) => ({
+                    id: `step_${p.sequence}`,
+                    taskId: parsed.taskId,
+                    sequence: p.sequence,
+                    action: p.action,
+                    tool: p.tool,
+                    status: 'pending'
+                  }))
+                });
+              } else if (parsed.stage === 'step_started') {
+                stageLabel = `Executing step ${parsed.currentStep}: ${parsed.step?.action || ''}`;
+                agentUpdater = (prev: any) => {
+                  if (!prev) return prev;
+                  const steps = (prev.steps || []).map((s: any) => {
+                    if (s.sequence === parsed.currentStep) {
+                      return { ...s, status: 'running', ...parsed.step };
+                    }
+                    return s;
+                  });
+                  return {
+                    ...prev,
+                    currentStep: parsed.currentStep,
+                    steps,
+                    status: 'running'
+                  };
+                };
+              } else if (parsed.stage === 'tool_started') {
+                stageLabel = `Running tool: ${parsed.tool}...`;
+              } else if (parsed.stage === 'tool_completed') {
+                stageLabel = `Tool ${parsed.tool?.name || ''} execution finished (${parsed.tool?.duration || 0}ms)`;
+              } else if (parsed.stage === 'step_completed') {
+                stageLabel = `Step completed: ${parsed.step?.action || ''}`;
+                agentUpdater = (prev: any) => {
+                  if (!prev) return prev;
+                  const steps = (prev.steps || []).map((s: any) => {
+                    if (s.id === parsed.step?.id || s.sequence === parsed.step?.sequence) {
+                      return { ...s, ...parsed.step, status: 'completed' };
+                    }
+                    return s;
+                  });
+                  return {
+                    ...prev,
+                    steps
+                  };
+                };
+              } else if (parsed.stage === 'approval_required') {
+                stageLabel = 'Human authorization required to proceed...';
+                agentUpdater = (prev: any) => {
+                  if (!prev) return prev;
+                  return {
+                    ...prev,
+                    status: 'waiting_for_approval',
+                    pendingApprovalAction: parsed.action
+                  };
+                };
+              } else if (parsed.stage === 'task_completed') {
+                stageLabel = `Task completed (${parsed.creditsUsed || 0} credits)`;
+                agentUpdater = (prev: any) => {
+                  if (!prev) return prev;
+                  return {
+                    ...prev,
+                    status: 'completed',
+                    creditsUsed: parsed.creditsUsed ?? prev.creditsUsed
+                  };
+                };
+              } else if (parsed.stage === 'searching') {
                 stageLabel = `Searching live web for "${parsed.query || 'query'}"...`;
               } else if (parsed.stage === 'retrieving_context') {
                 stageLabel = `Loading ${parsed.count || ''} attached document context(s)...`;
@@ -1004,9 +1138,12 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                       ...c,
                       messages: c.messages.map(m => {
                         if (m.id === assistantMessageId) {
+                          const updatedTask = agentUpdater ? agentUpdater(m.agentTask) : m.agentTask;
                           return {
                             ...m,
-                            currentStage: stageLabel
+                            currentStage: stageLabel,
+                            agentTaskId: parsed.taskId || m.agentTaskId,
+                            agentTask: updatedTask
                           };
                         }
                         return m;
@@ -1409,6 +1546,297 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
+  // Multimodal Media Handlers
+  const stageMedia = (item: MediaItem) => {
+    setStagedMedia(prev => [...prev.filter(m => m.id !== item.id), item]);
+  };
+
+  const unstageMedia = (mediaId: string) => {
+    setStagedMedia(prev => prev.filter(m => m.id !== mediaId));
+  };
+
+  const clearStagedMedia = () => {
+    setStagedMedia([]);
+  };
+
+  const loadUserMedia = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/media?limit=100', {
+        headers: getAuthHeaders()
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.items)) {
+          setUserMedia(data.items);
+        }
+      }
+    } catch (err) {
+      console.warn('[Darkano Media] Load failed:', err);
+    }
+  }, [token, getAuthHeaders]);
+
+  const uploadMediaBlob = async (blob: Blob, mimeType: string, type: 'image' | 'audio' = 'image'): Promise<MediaItem> => {
+    if (!token) throw new Error('Authentication required to upload media.');
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        try {
+          const base64data = reader.result as string;
+          const res = await fetch('/api/multimodal/upload', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              data: base64data,
+              mimeType,
+              type,
+              conversationId: activeConversationId
+            })
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to upload media file.');
+          }
+          const result = await res.json();
+          setUserMedia(prev => [result.media, ...prev]);
+          resolve(result.media);
+        } catch (e) {
+          reject(e);
+        }
+      };
+      reader.onerror = () => reject(new Error('Failed to read file buffer.'));
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const generateImageAction = async (prompt: string, aspectRatio = '1:1'): Promise<MediaItem> => {
+    if (!token) throw new Error('Authentication required to generate images.');
+    const res = await fetch('/api/multimodal/generate-image', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        prompt,
+        aspectRatio,
+        conversationId: activeConversationId
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      if (res.status === 402 || err.code === 'INSUFFICIENT_CREDITS') {
+        openModal('credits');
+      }
+      throw new Error(err.error || 'Failed to generate image.');
+    }
+    const data = await res.json();
+    await refreshCredits();
+    setUserMedia(prev => [data.mediaRecord, ...prev]);
+    return data.mediaRecord;
+  };
+
+  const editImageAction = async (sourceMediaId: string, prompt: string): Promise<MediaItem> => {
+    if (!token) throw new Error('Authentication required to edit images.');
+    const res = await fetch('/api/multimodal/edit-image', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        sourceMediaId,
+        prompt,
+        conversationId: activeConversationId
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      if (res.status === 402 || err.code === 'INSUFFICIENT_CREDITS') {
+        openModal('credits');
+      }
+      throw new Error(err.error || 'Failed to edit image.');
+    }
+    const data = await res.json();
+    await refreshCredits();
+    setUserMedia(prev => [data.mediaRecord, ...prev]);
+    return data.mediaRecord;
+  };
+
+  const transcribeAudioAction = async (audioBlob: Blob, prompt?: string): Promise<{ transcript: string; mediaRecord: MediaItem }> => {
+    if (!token) throw new Error('Authentication required for speech transcription.');
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        try {
+          const base64data = reader.result as string;
+          const res = await fetch('/api/multimodal/transcribe', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              audioBase64: base64data,
+              mimeType: audioBlob.type || 'audio/webm',
+              prompt,
+              conversationId: activeConversationId
+            })
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            if (res.status === 402 || err.code === 'INSUFFICIENT_CREDITS') {
+              openModal('credits');
+            }
+            throw new Error(err.error || 'Transcription failed.');
+          }
+          const data = await res.json();
+          await refreshCredits();
+          resolve(data);
+        } catch (e) {
+          reject(e);
+        }
+      };
+      reader.onerror = () => reject(new Error('Audio encoding failed.'));
+      reader.readAsDataURL(audioBlob);
+    });
+  };
+
+  const synthesizeSpeechAction = async (text: string, voiceName?: string, messageId?: string): Promise<{ audioUrl: string; base64Audio: string }> => {
+    if (!token) throw new Error('Authentication required for voice synthesis.');
+    const res = await fetch('/api/multimodal/tts', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        text,
+        voiceName: voiceName || 'Kore',
+        conversationId: activeConversationId,
+        messageId
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      if (res.status === 402 || err.code === 'INSUFFICIENT_CREDITS') {
+        openModal('credits');
+      }
+      throw new Error(err.error || 'Voice synthesis failed.');
+    }
+    const data = await res.json();
+    await refreshCredits();
+    if (messageId && activeConversationId) {
+      setConversations(prev => prev.map(c => {
+        if (c.id === activeConversationId) {
+          return {
+            ...c,
+            messages: c.messages.map(m => m.id === messageId ? { ...m, ttsAudioUrl: data.audioUrl } : m)
+          };
+        }
+        return c;
+      }));
+    }
+    return data;
+  };
+
+  const approveTaskStep = async (taskId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/agent/tasks/${taskId}/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        }
+      });
+      if (res.ok) {
+        setConversations(prev =>
+          prev.map(c => ({
+            ...c,
+            messages: c.messages.map(m => {
+              if (m.agentTask?.id === taskId) {
+                return {
+                  ...m,
+                  agentTask: {
+                    ...m.agentTask,
+                    status: 'running',
+                    pendingApprovalAction: null
+                  }
+                };
+              }
+              return m;
+            })
+          }))
+        );
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('[Darkano Client] Failed to approve step:', err);
+      return false;
+    }
+  };
+
+  const cancelAgentTask = async (taskId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/agent/tasks/${taskId}/cancel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        }
+      });
+      if (res.ok) {
+        setConversations(prev =>
+          prev.map(c => ({
+            ...c,
+            messages: c.messages.map(m => {
+              if (m.agentTask?.id === taskId) {
+                return {
+                  ...m,
+                  agentTask: {
+                    ...m.agentTask,
+                    status: 'cancelled'
+                  }
+                };
+              }
+              return m;
+            })
+          }))
+        );
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('[Darkano Client] Failed to cancel task:', err);
+      return false;
+    }
+  };
+
+  const retryAgentTask = async (taskId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/agent/tasks/${taskId}/retry`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.task) {
+          setConversations(prev =>
+            prev.map(c => ({
+              ...c,
+              messages: c.messages.map(m => {
+                if (m.agentTask?.id === taskId) {
+                  return {
+                    ...m,
+                    agentTask: data.task
+                  };
+                }
+                return m;
+              })
+            }))
+          );
+        }
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('[Darkano Client] Failed to retry task:', err);
+      return false;
+    }
+  };
+
   const value: WorkspaceContextType = {
     // Auth & Session
     isAuthenticated: !!currentUser && !!token,
@@ -1476,6 +1904,25 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     activePreviewFile,
     setActivePreviewFile,
 
+    // Phase 8 Multimodal Media
+    stagedMedia,
+    stageMedia,
+    unstageMedia,
+    clearStagedMedia,
+    userMedia,
+    loadUserMedia,
+    uploadMediaBlob,
+    generateImageAction,
+    editImageAction,
+    transcribeAudioAction,
+    synthesizeSpeechAction,
+    activeLightboxImage,
+    setActiveLightboxImage,
+    isImageGenModalOpen,
+    setImageGenModalOpen,
+    isVoiceChatModalOpen,
+    setVoiceChatModalOpen,
+
     // User Profile & Settings
     userProfile,
     setUserProfile,
@@ -1493,7 +1940,12 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setSidebarOpen,
     isMobileSidebarOpen,
     toggleMobileSidebar,
-    setMobileSidebarOpen
+    setMobileSidebarOpen,
+
+    // Agent Task Control
+    approveTaskStep,
+    cancelAgentTask,
+    retryAgentTask
   };
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

@@ -14,6 +14,10 @@ import { ToolRegistry } from './server/services/toolRegistry.js';
 import { CreditService, CreditTransactionType } from './server/services/creditService.js';
 import { BillingService } from './server/services/billingService.js';
 import { AdminService } from './server/services/adminService.js';
+import { AgentTaskService } from './server/db/agentTaskService.js';
+import { AgentEngine } from './server/services/agentEngine.js';
+import { MediaService } from './server/services/mediaService.js';
+import { MultimodalService } from './server/services/multimodalService.js';
 import fs from 'node:fs';
 
 async function startServer() {
@@ -22,7 +26,7 @@ async function startServer() {
 
   // JSON Body Parser with rawBody preservation for webhooks
   app.use(express.json({
-    limit: '2mb',
+    limit: '35mb',
     verify: (req: any, res, buf) => {
       req.rawBody = buf;
     }
@@ -346,9 +350,14 @@ async function startServer() {
       let enhancedMessage = payload.message;
       let multimodalParts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
 
-      if (payload.fileIds && payload.fileIds.length > 0) {
-        sendEvent('stage', { stage: 'retrieving_context', count: payload.fileIds.length });
-        const docContext = DocumentContextManager.prepareContext(userId, payload.fileIds, payload.message);
+      const hasFileAttachments = payload.fileIds && payload.fileIds.length > 0;
+      const hasMediaAttachments = (payload as any).mediaIds && (payload as any).mediaIds.length > 0;
+
+      if (hasFileAttachments || hasMediaAttachments) {
+        const fileIds = payload.fileIds || [];
+        const mediaIds = (payload as any).mediaIds || [];
+        sendEvent('stage', { stage: 'retrieving_context', count: fileIds.length + mediaIds.length });
+        const docContext = DocumentContextManager.prepareContext(userId, fileIds, payload.message, 32000, mediaIds);
 
         if (docContext.formattedContextText) {
           enhancedMessage = `${payload.message}\n${docContext.formattedContextText}`;
@@ -356,7 +365,7 @@ async function startServer() {
         multimodalParts = docContext.multimodalParts;
 
         // Record attachment links in DB
-        for (const fid of payload.fileIds) {
+        for (const fid of fileIds) {
           ConversationService.recordAttachment({
             conversationId: payload.conversationId,
             messageId: assistantMessageId,
@@ -379,8 +388,124 @@ async function startServer() {
         }
       }
 
+      // Check model capability matrix for multimodal inputs
+      if (multimodalParts.length > 0) {
+        const hasImage = multimodalParts.some(p => p.inlineData?.mimeType.startsWith('image/'));
+        const hasAudio = multimodalParts.some(p => p.inlineData?.mimeType.startsWith('audio/'));
+
+        const targetModel = provider.getModels().find(m => m.id === payload.model);
+        if (targetModel) {
+          if (hasImage && !targetModel.capabilityMatrix.vision) {
+            sendEvent('error', {
+              error: `Selected model '${targetModel.name}' does not support vision or image analysis. Please switch to a vision-capable model (e.g. Gemini 3.8 Flash, Gemini 2.5 Pro, or Darkano Ultra).`,
+              code: 'UNSUPPORTED_CAPABILITY'
+            });
+            sendEvent('done', { status: 'failed' });
+            res.end();
+            return;
+          }
+          if (hasAudio && !targetModel.capabilityMatrix.audio_input) {
+            sendEvent('error', {
+              error: `Selected model '${targetModel.name}' does not support audio ingestion. Please switch to an audio-capable model.`,
+              code: 'UNSUPPORTED_CAPABILITY'
+            });
+            sendEvent('done', { status: 'failed' });
+            res.end();
+            return;
+          }
+        }
+      }
+
       if (payload.mode === 'research') {
         sendEvent('stage', { stage: 'searching', query: payload.message });
+      }
+
+      if (payload.mode === 'agent') {
+        sendEvent('stage', { stage: 'planning', prompt: payload.message });
+        const agentTask = await AgentEngine.startTask({
+          userId,
+          conversationId: payload.conversationId,
+          prompt: payload.message,
+          modelId: payload.model,
+          fileIds: payload.fileIds
+        });
+
+        await new Promise<void>((resolve) => {
+          const unsubscribe = AgentEngine.subscribeToEvents(agentTask.id, event => {
+            if (event.event === 'plan_created') {
+              sendEvent('stage', {
+                stage: 'plan_created',
+                taskId: agentTask.id,
+                plan: event.task?.plan,
+                totalSteps: event.task?.totalSteps
+              });
+            } else if (event.event === 'step_started') {
+              sendEvent('stage', {
+                stage: 'step_started',
+                taskId: agentTask.id,
+                currentStep: event.task?.currentStep,
+                step: event.step
+              });
+            } else if (event.event === 'tool_started') {
+              sendEvent('stage', {
+                stage: 'tool_started',
+                taskId: agentTask.id,
+                tool: event.tool?.name
+              });
+            } else if (event.event === 'tool_completed') {
+              sendEvent('stage', {
+                stage: 'tool_completed',
+                taskId: agentTask.id,
+                tool: event.tool
+              });
+            } else if (event.event === 'step_completed') {
+              sendEvent('stage', {
+                stage: 'step_completed',
+                taskId: agentTask.id,
+                step: event.step
+              });
+            } else if (event.event === 'approval_required') {
+              sendEvent('stage', {
+                stage: 'approval_required',
+                taskId: agentTask.id,
+                action: event.task?.pendingApprovalAction
+              });
+            } else if (event.event === 'task_completed') {
+              if (event.citations && event.citations.length > 0) {
+                sendEvent('citations', event.citations);
+                sendEvent('sources', event.citations.map(c => ({
+                  title: c.title || c.domain || 'Source',
+                  url: c.url || '',
+                  domain: c.domain || '',
+                  snippet: c.snippet
+                })));
+              }
+              if (event.result) {
+                sendEvent('chunk', { text: event.result });
+              }
+              sendEvent('stage', {
+                stage: 'task_completed',
+                taskId: agentTask.id,
+                creditsUsed: event.task?.creditsUsed
+              });
+              sendEvent('done', { status: 'completed' });
+              unsubscribe();
+              resolve();
+            } else if (event.event === 'task_failed' || event.event === 'task_cancelled') {
+              sendEvent('error', { error: event.error || 'Agent task ended' });
+              unsubscribe();
+              resolve();
+            }
+          });
+
+          abortController.signal.addEventListener('abort', () => {
+            AgentEngine.cancelTask(agentTask.id, userId);
+            unsubscribe();
+            resolve();
+          });
+        });
+
+        return;
       }
 
       const streamPayload = {
@@ -587,7 +712,7 @@ async function startServer() {
   app.post(
     '/api/files/upload',
     requireAuth,
-    uploadMiddleware.array('files', 10),
+    uploadMiddleware.array('files', 10) as any,
     async (req: Request, res: Response): Promise<void> => {
       try {
         const userId = req.user!.userId;
@@ -1046,6 +1171,436 @@ async function startServer() {
       res.status(200).json(logs);
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to retrieve audit records', code: 'AUDIT_ERROR' });
+    }
+  });
+
+  // ==========================================
+  // 10. Phase 7: Real AI Agent / Multi-Step Engine
+  // ==========================================
+
+  // List all registered tools with schemas and requirements
+  app.get('/api/agent/tools', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const tools = ToolRegistry.getAllTools();
+      res.status(200).json({ tools });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to list agent tools' });
+    }
+  });
+
+  // Create and launch real task
+  app.post('/api/agent/tasks', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const { prompt, conversationId, modelId, fileIds } = req.body || {};
+
+      if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+        res.status(400).json({ error: 'Prompt is required for agent task execution.', code: 'INVALID_PROMPT' });
+        return;
+      }
+
+      if (prompt.trim().length > 32000) {
+        res.status(400).json({ error: 'Prompt exceeds maximum character limit (32,000).', code: 'PROMPT_TOO_LONG' });
+        return;
+      }
+
+      const task = await AgentEngine.startTask({
+        userId,
+        conversationId,
+        prompt: prompt.trim(),
+        modelId,
+        fileIds: Array.isArray(fileIds) ? fileIds : undefined
+      });
+
+      res.status(201).json({ task });
+    } catch (err: any) {
+      console.error('[Darkano Agent API] Task creation error:', err?.message);
+      res.status(500).json({ error: err?.message || 'Failed to initialize agent task', code: 'TASK_INIT_FAILED' });
+    }
+  });
+
+  // List user's tasks with pagination
+  app.get('/api/agent/tasks', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const userId = req.user!.userId;
+      const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const data = AgentTaskService.listUserTasks(userId, limit, offset);
+      res.status(200).json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to list agent tasks' });
+    }
+  });
+
+  // Get specific task by ID (Enforces strict user isolation)
+  app.get('/api/agent/tasks/:taskId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const userId = req.user!.userId;
+      const task = AgentTaskService.getTask(req.params.taskId, userId);
+      if (!task) {
+        res.status(404).json({ error: 'Task not found or access denied.', code: 'TASK_NOT_FOUND' });
+        return;
+      }
+      res.status(200).json({ task });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to get task' });
+    }
+  });
+
+  // Get task steps
+  app.get('/api/agent/tasks/:taskId/steps', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const userId = req.user!.userId;
+      const task = AgentTaskService.getTask(req.params.taskId, userId);
+      if (!task) {
+        res.status(404).json({ error: 'Task not found or access denied.', code: 'TASK_NOT_FOUND' });
+        return;
+      }
+      const steps = AgentTaskService.getSteps(req.params.taskId);
+      res.status(200).json({ steps });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to get steps' });
+    }
+  });
+
+  // Get tool execution records for task
+  app.get('/api/agent/tasks/:taskId/executions', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const userId = req.user!.userId;
+      const task = AgentTaskService.getTask(req.params.taskId, userId);
+      if (!task) {
+        res.status(404).json({ error: 'Task not found or access denied.', code: 'TASK_NOT_FOUND' });
+        return;
+      }
+      const executions = AgentTaskService.getToolExecutions(req.params.taskId);
+      res.status(200).json({ executions });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to get tool executions' });
+    }
+  });
+
+  // Cancel task
+  app.post('/api/agent/tasks/:taskId/cancel', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const userId = req.user!.userId;
+      const success = AgentEngine.cancelTask(req.params.taskId, userId);
+      if (!success) {
+        res.status(404).json({ error: 'Task not found or could not be cancelled.', code: 'CANCEL_FAILED' });
+        return;
+      }
+      res.status(200).json({ success: true, message: 'Task cancelled successfully.' });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to cancel task' });
+    }
+  });
+
+  // Approve pending step (Human approval gate)
+  app.post('/api/agent/tasks/:taskId/approve', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const userId = req.user!.userId;
+      const success = AgentEngine.approveStep(req.params.taskId, userId);
+      if (!success) {
+        res.status(400).json({ error: 'Task is not waiting for approval or access denied.', code: 'APPROVAL_FAILED' });
+        return;
+      }
+      res.status(200).json({ success: true, message: 'Step approved. Resuming agent execution.' });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to approve step' });
+    }
+  });
+
+  // Retry failed task
+  app.post('/api/agent/tasks/:taskId/retry', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const task = await AgentEngine.retryTask(req.params.taskId, userId);
+      if (!task) {
+        res.status(400).json({ error: 'Only failed or cancelled tasks can be retried.', code: 'RETRY_FAILED' });
+        return;
+      }
+      res.status(200).json({ task });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to retry task' });
+    }
+  });
+
+  // Server-Sent Events (SSE) stream for real-time task progress
+  app.get('/api/agent/tasks/:taskId/events', requireAuth, (req: Request, res: Response): void => {
+    const userId = req.user!.userId;
+    const taskId = req.params.taskId;
+
+    const task = AgentTaskService.getTask(taskId, userId);
+    if (!task) {
+      res.status(404).json({ error: 'Task not found or access denied.' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    // Send initial snapshot
+    res.write(`data: ${JSON.stringify({ event: 'initial_state', taskId, task })}\n\n`);
+
+    const unsubscribe = AgentEngine.subscribeToEvents(taskId, event => {
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (event.event === 'task_completed' || event.event === 'task_failed' || event.event === 'task_cancelled') {
+          setTimeout(() => {
+            try {
+              res.end();
+            } catch {}
+          }, 1500);
+        }
+      } catch (err) {
+        console.warn('[Darkano Agent SSE] Stream send error:', err);
+      }
+    });
+
+    req.on('close', () => {
+      unsubscribe();
+    });
+  });
+
+  // ==========================================
+  // 11. Phase 8: Real Multimodal AI System
+  // ==========================================
+
+  // Query multimodal engine status and capabilities
+  app.get('/api/multimodal/capabilities', (req: Request, res: Response): void => {
+    try {
+      const isGeminiConfigured = Boolean(process.env.GEMINI_API_KEY);
+      res.status(200).json({
+        configured: isGeminiConfigured,
+        capabilities: {
+          vision: isGeminiConfigured,
+          image_generation: isGeminiConfigured,
+          audio_transcription: isGeminiConfigured,
+          speech_synthesis: isGeminiConfigured,
+          voice_chat: isGeminiConfigured
+        },
+        models: {
+          vision: 'gemini-3.8-flash',
+          imageGeneration: 'gemini-3.1-flash-lite-image',
+          audioInput: 'gemini-3.8-flash',
+          speechSynthesis: 'gemini-3.1-flash-tts-preview'
+        },
+        creditCosts: {
+          imageGeneration: 10,
+          imageEdit: 10,
+          audioTranscription: 5,
+          textToSpeech: 3
+        },
+        supportedVoices: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede']
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to retrieve multimodal capabilities' });
+    }
+  });
+
+  // Upload image or audio file directly to user media vault
+  app.post('/api/multimodal/upload', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const { data, mimeType, type, conversationId } = req.body || {};
+
+      if (!data || typeof data !== 'string') {
+        res.status(400).json({ error: 'Base64 data string is required for media upload.', code: 'INVALID_PAYLOAD' });
+        return;
+      }
+
+      const cleanBase64 = data.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(cleanBase64, 'base64');
+
+      const mediaRecord = MediaService.saveMedia({
+        userId,
+        conversationId,
+        buffer,
+        declaredMime: mimeType,
+        type: type || (mimeType?.startsWith('audio/') ? 'audio' : 'image')
+      });
+
+      res.status(201).json({ media: mediaRecord });
+    } catch (err: any) {
+      console.error('[Darkano Media Upload Error]:', err?.message);
+      res.status(400).json({ error: err?.message || 'Failed to upload media', code: 'UPLOAD_FAILED' });
+    }
+  });
+
+  // Generate image using real image generation model
+  app.post('/api/multimodal/generate-image', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const { prompt, aspectRatio, conversationId } = req.body || {};
+
+      if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+        res.status(400).json({ error: 'Image prompt is required.', code: 'PROMPT_REQUIRED' });
+        return;
+      }
+
+      const result = await MultimodalService.generateImage(userId, {
+        prompt: prompt.trim(),
+        aspectRatio: aspectRatio || '1:1',
+        conversationId
+      });
+
+      res.status(200).json(result);
+    } catch (err: any) {
+      console.error('[Darkano Image Gen Error]:', err?.message);
+      res.status(400).json({ error: err?.message || 'Failed to generate image', code: 'GENERATION_FAILED' });
+    }
+  });
+
+  // Edit an existing image with text instructions
+  app.post('/api/multimodal/edit-image', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const { sourceMediaId, prompt, conversationId } = req.body || {};
+
+      if (!sourceMediaId || !prompt) {
+        res.status(400).json({ error: 'Source media ID and editing prompt are required.', code: 'INVALID_PARAMS' });
+        return;
+      }
+
+      const result = await MultimodalService.editImage(userId, {
+        sourceMediaId,
+        prompt: prompt.trim(),
+        conversationId
+      });
+
+      res.status(200).json(result);
+    } catch (err: any) {
+      console.error('[Darkano Image Edit Error]:', err?.message);
+      res.status(400).json({ error: err?.message || 'Failed to edit image', code: 'EDIT_FAILED' });
+    }
+  });
+
+  // Transcribe audio (STT) from user recording or file
+  app.post('/api/multimodal/transcribe', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const { audioBase64, mimeType, prompt, conversationId } = req.body || {};
+
+      if (!audioBase64 || typeof audioBase64 !== 'string') {
+        res.status(400).json({ error: 'audioBase64 parameter is required.', code: 'AUDIO_REQUIRED' });
+        return;
+      }
+
+      const cleanB64 = audioBase64.replace(/^data:[^;]+;base64,/, '');
+      const audioBuffer = Buffer.from(cleanB64, 'base64');
+
+      const result = await MultimodalService.transcribeAudio(userId, {
+        audioBuffer,
+        mimeType: mimeType || 'audio/webm',
+        prompt,
+        conversationId
+      });
+
+      res.status(200).json(result);
+    } catch (err: any) {
+      console.error('[Darkano Transcribe Error]:', err?.message);
+      res.status(400).json({ error: err?.message || 'Failed to transcribe audio', code: 'TRANSCRIBE_FAILED' });
+    }
+  });
+
+  // Synthesize text-to-speech (TTS)
+  app.post('/api/multimodal/tts', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const { text, voiceName, conversationId, messageId } = req.body || {};
+
+      if (!text || typeof text !== 'string' || !text.trim()) {
+        res.status(400).json({ error: 'Text parameter is required for TTS synthesis.', code: 'TEXT_REQUIRED' });
+        return;
+      }
+
+      const result = await MultimodalService.textToSpeech(userId, {
+        text: text.trim(),
+        voiceName: voiceName || 'Kore',
+        conversationId,
+        messageId
+      });
+
+      res.status(200).json(result);
+    } catch (err: any) {
+      console.error('[Darkano TTS Error]:', err?.message);
+      res.status(400).json({ error: err?.message || 'Failed to synthesize speech', code: 'TTS_FAILED' });
+    }
+  });
+
+  // List user media items
+  app.get('/api/media', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const userId = req.user!.userId;
+      const conversationId = req.query.conversationId as string | undefined;
+      const type = req.query.type as string | undefined;
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const result = MediaService.getUserMedia(userId, {
+        conversationId,
+        type,
+        limit,
+        offset
+      });
+
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to list media', code: 'MEDIA_LIST_ERROR' });
+    }
+  });
+
+  // Stream media file with authentication
+  app.get('/api/media/:mediaId', (req: Request, res: Response): void => {
+    try {
+      // Support Authorization header or query token for standard <img> and <audio> tags
+      let token = extractToken(req);
+      if (!token && req.query.token && typeof req.query.token === 'string') {
+        token = req.query.token;
+      }
+
+      if (!token) {
+        res.status(401).json({ error: 'Authentication required to view media.', code: 'AUTH_REQUIRED' });
+        return;
+      }
+
+      const session = AuthService.validateSession(token);
+      if (!session) {
+        res.status(401).json({ error: 'Invalid or expired session.', code: 'INVALID_SESSION' });
+        return;
+      }
+
+      const userId = session.userId;
+      const mediaId = req.params.mediaId;
+
+      const mediaData = MediaService.getMediaBuffer(userId, mediaId);
+      if (!mediaData) {
+        res.status(404).json({ error: 'Media file not found or access denied.', code: 'MEDIA_NOT_FOUND' });
+        return;
+      }
+
+      res.setHeader('Content-Type', mediaData.mimeType);
+      res.setHeader('Content-Length', mediaData.buffer.length);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.end(mediaData.buffer);
+    } catch (err: any) {
+      console.error('[Darkano Media Stream Error]:', err?.message);
+      res.status(500).json({ error: 'Failed to stream media file.' });
+    }
+  });
+
+  // Delete media item
+  app.delete('/api/media/:mediaId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const userId = req.user!.userId;
+      const mediaId = req.params.mediaId;
+
+      MediaService.deleteMedia(userId, mediaId);
+      res.status(200).json({ success: true, message: 'Media removed successfully.' });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to delete media', code: 'DELETE_FAILED' });
     }
   });
 

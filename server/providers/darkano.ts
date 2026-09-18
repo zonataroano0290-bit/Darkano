@@ -48,6 +48,18 @@ export class DarkanoProvider extends BaseAIProvider {
         maxOutputTokens: '16k tokens',
         latencyTier: 'Deep Think',
         capabilities: ['Deep Reasoning', 'Mathematical Synthesis', 'Complex Planning', 'Multi-Modal'],
+        capabilityMatrix: {
+          text: true,
+          vision: true,
+          image_generation: false,
+          image_editing: false,
+          audio_input: true,
+          audio_output: false,
+          speech_to_text: true,
+          text_to_speech: false,
+          video_input: false,
+          long_context: true
+        },
         isAvailable: available,
         streamingSupported: true,
         accentColor: '#06b6d4',
@@ -63,6 +75,18 @@ export class DarkanoProvider extends BaseAIProvider {
         maxOutputTokens: '8k tokens',
         latencyTier: 'Ultra Fast',
         capabilities: ['Sub-second Response', '1M Context', 'Realtime Extraction', 'High Throughput'],
+        capabilityMatrix: {
+          text: true,
+          vision: true,
+          image_generation: false,
+          image_editing: false,
+          audio_input: false,
+          audio_output: false,
+          speech_to_text: false,
+          text_to_speech: false,
+          video_input: false,
+          long_context: true
+        },
         isAvailable: available,
         streamingSupported: true,
         accentColor: '#38bdf8'
@@ -77,6 +101,18 @@ export class DarkanoProvider extends BaseAIProvider {
         maxOutputTokens: '16k tokens',
         latencyTier: 'Fast',
         capabilities: ['AST Refactoring', 'Test Scaffolding', 'Security Audit', 'Cross-Language Migration'],
+        capabilityMatrix: {
+          text: true,
+          vision: false,
+          image_generation: false,
+          image_editing: false,
+          audio_input: false,
+          audio_output: false,
+          speech_to_text: false,
+          text_to_speech: false,
+          video_input: false,
+          long_context: true
+        },
         isAvailable: available,
         streamingSupported: true,
         accentColor: '#10b981'
