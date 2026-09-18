@@ -399,4 +399,166 @@ export class AuthService {
 
     return this.getProfile(userId);
   }
+
+  /**
+   * Authenticate or register a user via verified Google identity.
+   * - If account with Google ID exists, signs in.
+   * - If account with verified email exists, links Google ID and signs in.
+   * - If no account exists, creates new user, profile, and default credits.
+   * - Never creates duplicate users.
+   */
+  static loginOrCreateGoogleUser(identity: {
+    sub: string;
+    email: string;
+    email_verified: boolean;
+    name?: string;
+    picture?: string;
+    given_name?: string;
+    family_name?: string;
+  }) {
+    if (!identity.sub || !identity.email || !identity.email_verified) {
+      throw new Error('Invalid or unverified Google identity');
+    }
+
+    const email = identity.email.trim().toLowerCase();
+    const googleId = identity.sub.trim();
+    const now = new Date().toISOString();
+    const adminEmails = (process.env.ADMIN_EMAILS || 'anotiktok42@gmail.com').toLowerCase().split(',').map(e => e.trim());
+
+    // 1. Check if user already exists by googleId
+    let user = db.prepare(`
+      SELECT id, email, role, creditBalance, googleId, authProvider, createdAt 
+      FROM users 
+      WHERE googleId = ?
+    `).get(googleId) as any;
+
+    // 2. If not found by googleId, check by email
+    if (!user) {
+      user = db.prepare(`
+        SELECT id, email, role, creditBalance, googleId, authProvider, createdAt 
+        FROM users 
+        WHERE email = ?
+      `).get(email) as any;
+
+      if (user) {
+        // Link existing user to Google ID
+        const currentProvider = user.authProvider || 'local';
+        const newProvider = currentProvider === 'google' ? 'google' : 'both';
+        db.prepare(`
+          UPDATE users 
+          SET googleId = ?, authProvider = ?, updatedAt = ? 
+          WHERE id = ?
+        `).run(googleId, newProvider, now, user.id);
+      }
+    }
+
+    // Existing user found
+    if (user) {
+      // Auto-elevate to owner if configured in ADMIN_EMAILS
+      if (adminEmails.includes(email) && user.role !== 'owner') {
+        db.prepare(`UPDATE users SET role = 'owner', updatedAt = ? WHERE id = ?`).run(now, user.id);
+        user.role = 'owner';
+      }
+
+      // Check profile
+      let profile = db.prepare(`
+        SELECT displayName, avatarUrl, plan, createdAt 
+        FROM profiles 
+        WHERE userId = ?
+      `).get(user.id) as any;
+
+      if (!profile) {
+        const profileId = `prf_${crypto.randomUUID().replace(/-/g, '')}`;
+        const displayName = identity.name?.trim() || identity.given_name?.trim() || email.split('@')[0];
+        const avatarUrl = identity.picture || null;
+        db.prepare(`
+          INSERT INTO profiles (id, userId, displayName, avatarUrl, plan, createdAt, updatedAt)
+          VALUES (?, ?, ?, ?, 'Developer', ?, ?)
+        `).run(profileId, user.id, displayName, avatarUrl, now, now);
+        profile = { displayName, avatarUrl, plan: 'Developer', createdAt: now };
+      } else if (!profile.avatarUrl && identity.picture) {
+        db.prepare(`UPDATE profiles SET avatarUrl = ?, updatedAt = ? WHERE userId = ?`).run(identity.picture, now, user.id);
+        profile.avatarUrl = identity.picture;
+      }
+
+      const session = this.createSession(user.id);
+
+      return {
+        user: {
+          id: user.id,
+          email: user.email,
+          displayName: profile?.displayName || email.split('@')[0],
+          avatarUrl: profile?.avatarUrl || null,
+          plan: profile?.plan || 'Developer',
+          role: (user.role || 'user') as 'user' | 'admin' | 'owner',
+          creditBalance: user.creditBalance ?? 500,
+          authProvider: (user.authProvider as any) || 'google',
+          createdAt: profile?.createdAt || user.createdAt
+        },
+        token: session.token,
+        expiresAt: session.expiresAt,
+        isNewUser: false
+      };
+    }
+
+    // 3. New user registration via Google
+    const userId = `usr_${crypto.randomUUID().replace(/-/g, '')}`;
+    const profileId = `prf_${crypto.randomUUID().replace(/-/g, '')}`;
+    const randomPassword = crypto.randomBytes(32).toString('hex');
+    const { hash, salt } = hashPassword(randomPassword);
+
+    const initialRole: 'user' | 'owner' = adminEmails.includes(email) ? 'owner' : 'user';
+    const initialCredits = 500;
+    const displayName = identity.name?.trim() || identity.given_name?.trim() || email.split('@')[0];
+    const avatarUrl = identity.picture || null;
+
+    db.prepare(`
+      INSERT INTO users (id, email, passwordHash, salt, role, creditBalance, googleId, authProvider, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'google', ?, ?)
+    `).run(userId, email, hash, salt, initialRole, initialCredits, googleId, now, now);
+
+    db.prepare(`
+      INSERT INTO profiles (id, userId, displayName, avatarUrl, plan, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, 'Developer', ?, ?)
+    `).run(profileId, userId, displayName, avatarUrl, now, now);
+
+    try {
+      const grantTxId = `ctx_${crypto.randomUUID().replace(/-/g, '')}`;
+      db.prepare(`
+        INSERT INTO credit_transactions (id, userId, transactionId, type, amount, balanceAfter, source, metadataJson, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        grantTxId,
+        userId,
+        grantTxId,
+        'subscription_grant',
+        initialCredits,
+        initialCredits,
+        'signup_bonus',
+        JSON.stringify({ note: 'Initial Developer tier Google sign-in allowance' }),
+        now
+      );
+    } catch (grantErr: any) {
+      console.warn('[Darkano Auth] Notice recording Google signup credits:', grantErr?.message);
+    }
+
+    const session = this.createSession(userId);
+
+    return {
+      user: {
+        id: userId,
+        email,
+        displayName,
+        avatarUrl,
+        plan: 'Developer',
+        role: initialRole,
+        creditBalance: initialCredits,
+        authProvider: 'google',
+        createdAt: now
+      },
+      token: session.token,
+      expiresAt: session.expiresAt,
+      isNewUser: true
+    };
+  }
 }

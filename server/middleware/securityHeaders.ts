@@ -14,13 +14,13 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://esm.sh; " +
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://esm.sh https://accounts.google.com; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; " +
     "font-src 'self' data: https://fonts.gstatic.com; " +
     "img-src 'self' data: blob: https:; " +
-    "connect-src 'self' ws: wss: https:; " +
+    "connect-src 'self' ws: wss: https: https://accounts.google.com; " +
     "media-src 'self' blob: data:; " +
-    "frame-src 'self' blob:; " +
+    "frame-src 'self' blob: https://accounts.google.com; " +
     "frame-ancestors 'self' https://ai.studio https://*.google.com https://*.run.app;"
   );
 

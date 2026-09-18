@@ -14,6 +14,7 @@ import { providerRegistry } from './server/providers/registry.js';
 import { validateAndPrepareChatRequest } from './server/contextManager.js';
 import { SERVER_CONFIG } from './server/config.js';
 import { AuthService } from './server/db/authService.js';
+import { GoogleAuthService } from './server/services/googleAuthService.js';
 import { ConversationService } from './server/db/conversationService.js';
 import { requireAuth, requireAdmin, extractToken } from './server/middleware/authMiddleware.js';
 import { FileService, uploadMiddleware } from './server/services/fileService.js';
@@ -127,10 +128,58 @@ async function startServer() {
   // ==========================================
   // 2. Authentication Endpoints
   // ==========================================
+  app.get('/api/auth/google/config', (req: Request, res: Response): void => {
+    res.status(200).json(GoogleAuthService.getConfig());
+  });
+
+  app.post('/api/auth/google', authRateLimiter, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { credential } = req.body || {};
+      if (!credential || typeof credential !== 'string') {
+        res.status(400).json({ error: 'Google credential token is required', code: 'MISSING_CREDENTIAL' });
+        return;
+      }
+
+      // Verify token cryptographically with Google
+      const verifiedIdentity = await GoogleAuthService.verifyCredential(credential);
+
+      // Authenticate or register user, linking identity without creating duplicates
+      const result = AuthService.loginOrCreateGoogleUser(verifiedIdentity);
+
+      // Set secure HTTP-only session cookie
+      res.cookie('darkano_session', result.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        path: '/'
+      });
+
+      res.status(200).json(result);
+    } catch (err: any) {
+      console.error('[Darkano Auth] Google authentication error:', err?.message);
+      const isClientError = err?.message?.includes('not verified') || 
+                           err?.message?.includes('Invalid') || 
+                           err?.message?.includes('expired') ||
+                           err?.message?.includes('missing');
+      res.status(isClientError ? 401 : 500).json({
+        error: err?.message || 'Google authentication failed',
+        code: 'GOOGLE_AUTH_FAILED'
+      });
+    }
+  });
+
   app.post('/api/auth/register', authRateLimiter, (req: Request, res: Response): void => {
     try {
       const { email, password, displayName } = req.body || {};
       const result = AuthService.register({ email, password, displayName });
+      res.cookie('darkano_session', result.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        path: '/'
+      });
       res.status(201).json(result);
     } catch (err: any) {
       res.status(400).json({ error: err?.message || 'Registration failed', code: 'REGISTRATION_ERROR' });
@@ -141,6 +190,13 @@ async function startServer() {
     try {
       const { email, password } = req.body || {};
       const result = AuthService.login({ email, password });
+      res.cookie('darkano_session', result.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        path: '/'
+      });
       res.status(200).json(result);
     } catch (err: any) {
       res.status(401).json({ error: err?.message || 'Invalid email or password', code: 'AUTH_FAILED' });
@@ -152,6 +208,7 @@ async function startServer() {
     if (token) {
       AuthService.invalidateSession(token);
     }
+    res.clearCookie('darkano_session', { path: '/' });
     res.status(200).json({ success: true, message: 'Logged out successfully' });
   });
 

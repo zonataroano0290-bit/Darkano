@@ -688,6 +688,17 @@ try {
     console.log('[Darkano Database] Added `creditBalance` column to `users` table.');
   }
 
+  if (!columnNames.includes('googleId')) {
+    db.exec(`ALTER TABLE users ADD COLUMN googleId TEXT`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(googleId) WHERE googleId IS NOT NULL`);
+    console.log('[Darkano Database] Added `googleId` column to `users` table.');
+  }
+
+  if (!columnNames.includes('authProvider')) {
+    db.exec(`ALTER TABLE users ADD COLUMN authProvider TEXT NOT NULL DEFAULT 'local'`);
+    console.log('[Darkano Database] Added `authProvider` column to `users` table.');
+  }
+
   const msgTableInfo = db.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
   const msgCols = msgTableInfo.map(col => col.name);
   if (!msgCols.includes('mediaJson')) {

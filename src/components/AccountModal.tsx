@@ -71,8 +71,17 @@ export const AccountModal: React.FC = () => {
 
         {/* Profile Card */}
         <div className="flex items-center gap-4 p-4 rounded-xl bg-white/[0.02] border border-rose-950/40">
-          <div className="relative w-14 h-14 rounded-2xl bg-gradient-to-br from-rose-950 to-neutral-900 border border-rose-700/50 flex items-center justify-center text-base font-bold font-mono text-rose-200 shadow-inner">
-            {userProfile.avatarText}
+          <div className="relative w-14 h-14 rounded-2xl bg-gradient-to-br from-rose-950 to-neutral-900 border border-rose-700/50 flex items-center justify-center text-base font-bold font-mono text-rose-200 shadow-inner overflow-hidden">
+            {currentUser?.avatarUrl ? (
+              <img
+                src={currentUser.avatarUrl}
+                alt={userProfile.name}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              userProfile.avatarText
+            )}
             <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-400 ring-2 ring-black" />
           </div>
 

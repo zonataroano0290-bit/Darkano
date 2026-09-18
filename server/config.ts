@@ -6,6 +6,8 @@ dotenv.config();
 export const SERVER_CONFIG = {
   port: 3000,
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+  googleClientId: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '',
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
   maxMessageLength: 32000,
   maxHistoryMessages: 30,
   requestTimeoutMs: 60000,

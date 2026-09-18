@@ -32,6 +32,8 @@ const DarkanoAppContent: React.FC = () => {
     resetPassword,
     authError,
     clearAuthError,
+    loginWithGoogle,
+    getGoogleAuthConfig,
     activeLightboxImage,
     setActiveLightboxImage,
     isImageGenModalOpen,
@@ -66,6 +68,8 @@ const DarkanoAppContent: React.FC = () => {
       <AuthScreen
         onLogin={login}
         onRegister={register}
+        onGoogleLogin={loginWithGoogle}
+        getGoogleAuthConfig={getGoogleAuthConfig}
         onForgotPassword={forgotPassword}
         onResetPassword={resetPassword}
         authError={authError}

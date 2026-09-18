@@ -102,8 +102,17 @@ export const Header: React.FC = () => {
           title="Account profile & database vault"
           id="header-user-account-btn"
         >
-          <div className="w-5 h-5 rounded-md bg-gradient-to-br from-rose-900 to-neutral-900 border border-rose-600/50 flex items-center justify-center text-[10px] font-bold text-rose-200">
-            {userProfile.avatarText}
+          <div className="w-5 h-5 rounded-md bg-gradient-to-br from-rose-900 to-neutral-900 border border-rose-600/50 flex items-center justify-center text-[10px] font-bold text-rose-200 overflow-hidden shrink-0">
+            {currentUser?.avatarUrl ? (
+              <img
+                src={currentUser.avatarUrl}
+                alt={userProfile.name}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              userProfile.avatarText
+            )}
           </div>
           <span className="hidden sm:inline font-sans text-xs truncate max-w-[90px]">{userProfile.name.split(' ')[0]}</span>
         </button>

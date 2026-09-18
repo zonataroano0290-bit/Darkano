@@ -439,8 +439,17 @@ export const Sidebar: React.FC = () => {
         <div className="p-3 border-t border-rose-950/40 bg-black/40">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-rose-950 border border-rose-700/40 flex items-center justify-center text-xs font-mono font-bold text-rose-200">
-                {userProfile.avatarText}
+              <div className="w-7 h-7 rounded-lg bg-rose-950 border border-rose-700/40 flex items-center justify-center text-xs font-mono font-bold text-rose-200 overflow-hidden shrink-0">
+                {currentUser?.avatarUrl ? (
+                  <img
+                    src={currentUser.avatarUrl}
+                    alt={userProfile.name}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  userProfile.avatarText
+                )}
               </div>
               <div className="min-w-0">
                 <div className="text-xs font-medium text-white truncate">{userProfile.name}</div>

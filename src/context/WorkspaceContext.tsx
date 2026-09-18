@@ -25,6 +25,8 @@ interface WorkspaceContextType {
   authError: string | null;
   clearAuthError: () => void;
   login: (email: string, password: string) => Promise<void>;
+  loginWithGoogle: (credential: string) => Promise<any>;
+  getGoogleAuthConfig: () => Promise<{ configured: boolean; clientId: string }>;
   register: (displayName: string, email: string, password: string, confirm: string) => Promise<void>;
   logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<{ success: boolean; message: string; resetToken?: string }>;
@@ -603,6 +605,64 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } finally {
       setAuthLoading(false);
     }
+  };
+
+  // 2b. Continue with Google
+  const loginWithGoogle = async (credential: string) => {
+    setAuthLoading(true);
+    setAuthError(null);
+
+    try {
+      const res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Google authentication failed');
+      }
+
+      setToken(data.token);
+      localStorage.setItem(TOKEN_STORAGE_KEY, data.token);
+      setCurrentUser(data.user);
+      setUserProfile({
+        name: data.user.displayName,
+        email: data.user.email,
+        avatarText: (data.user.displayName || 'DU').slice(0, 2).toUpperCase(),
+        plan: data.user.plan || 'Developer',
+        quota: data.user.quota || {
+          tokensUsed: 0,
+          tokensLimit: 2000000,
+          storageUsedMb: 0,
+          storageLimitMb: 10240,
+          activeSessions: 1
+        }
+      });
+
+      // Restore user conversations & files from server
+      await fetchUserConversations(data.token);
+      await fetchUserFiles(data.token);
+      return data;
+    } catch (err: any) {
+      setAuthError(err?.message || 'Failed to authenticate with Google');
+      throw err;
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const getGoogleAuthConfig = async (): Promise<{ configured: boolean; clientId: string }> => {
+    try {
+      const res = await fetch('/api/auth/google/config');
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.warn('[WorkspaceContext] Could not fetch Google auth config:', err);
+    }
+    return { configured: false, clientId: '' };
   };
 
   // 3. Logout
@@ -1973,6 +2033,8 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     authError,
     clearAuthError,
     login,
+    loginWithGoogle,
+    getGoogleAuthConfig,
     register,
     logout,
     forgotPassword,

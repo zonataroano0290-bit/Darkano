@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Lock,
   Mail,
@@ -10,14 +10,26 @@ import {
   CheckCircle2,
   RefreshCw,
   Eye,
-  EyeOff
+  EyeOff,
+  ExternalLink
 } from 'lucide-react';
 import { BrandLogo } from './BrandLogo';
 import { AuthMode } from '../types';
+import {
+  loadGoogleSdk,
+  isGoogleSdkLoaded,
+  initializeGoogleIdClient,
+  initOAuth2TokenClient,
+  requestGoogleAccessToken,
+  renderGoogleSignInButton,
+  promptGoogleOneTap
+} from '../services/googleAuthLoader';
 
 interface AuthScreenProps {
   onLogin: (email: string, password: string) => Promise<void>;
   onRegister: (displayName: string, email: string, password: string, confirm: string) => Promise<void>;
+  onGoogleLogin: (credential: string) => Promise<any>;
+  getGoogleAuthConfig: () => Promise<{ configured: boolean; clientId: string }>;
   onForgotPassword: (email: string) => Promise<{ success: boolean; message: string; resetToken?: string }>;
   onResetPassword: (token: string, newPassword: string) => Promise<{ success: boolean; message: string }>;
   authError: string | null;
@@ -28,6 +40,8 @@ interface AuthScreenProps {
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   onLogin,
   onRegister,
+  onGoogleLogin,
+  getGoogleAuthConfig,
   onForgotPassword,
   onResetPassword,
   authError,
@@ -42,6 +56,282 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+
+  // Google Authentication state
+  const [googleConfig, setGoogleConfig] = useState<{ configured: boolean; clientId: string }>({
+    configured: false,
+    clientId: ''
+  });
+  const [sdkStatus, setSdkStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isGoogleRendered, setIsGoogleRendered] = useState(false);
+  const isMountedRef = useRef(true);
+  const googleBtnContainerRef = useRef<HTMLDivElement>(null);
+
+  // Initialize and load the Google Identity Services SDK safely
+  const initGoogleAuth = useCallback(async (forceReload = false) => {
+    try {
+      setSdkStatus('loading');
+
+      // 1. Fetch server config for Google OAuth
+      const config = await getGoogleAuthConfig();
+      if (!isMountedRef.current) return;
+      setGoogleConfig(config);
+
+      // 2. Load GIS SDK from official endpoint https://accounts.google.com/gsi/client
+      await loadGoogleSdk(forceReload);
+      if (!isMountedRef.current) return;
+
+      setSdkStatus('ready');
+
+      // 3. Initialize Google Identity Client & pre-initialize OAuth2 Token Client
+      if (config.configured && config.clientId && isGoogleSdkLoaded()) {
+        initializeGoogleIdClient(
+          config.clientId,
+          async (credential) => {
+            if (!isMountedRef.current) return;
+            setIsGoogleLoading(true);
+            setClientError(null);
+            clearAuthError();
+            try {
+              await onGoogleLogin(credential);
+            } catch (err: any) {
+              if (isMountedRef.current) {
+                setClientError(err?.message || 'Google authentication failed');
+              }
+            } finally {
+              if (isMountedRef.current) {
+                setIsGoogleLoading(false);
+              }
+            }
+          },
+          (err) => {
+            console.warn('[Darkano Auth] Google ID Client warning:', err);
+          }
+        );
+
+        initOAuth2TokenClient(
+          config.clientId,
+          async (accessToken) => {
+            if (!isMountedRef.current) return;
+            setIsGoogleLoading(true);
+            setClientError(null);
+            clearAuthError();
+            try {
+              await onGoogleLogin(accessToken);
+            } catch (err: any) {
+              if (isMountedRef.current) {
+                setClientError(err?.message || 'Google authentication failed');
+              }
+            } finally {
+              if (isMountedRef.current) {
+                setIsGoogleLoading(false);
+              }
+            }
+          },
+          (err: any) => {
+            if (isMountedRef.current) {
+              setIsGoogleLoading(false);
+              setClientError(err?.message || 'Google authentication failed');
+            }
+          },
+          () => {
+            if (isMountedRef.current) {
+              setIsGoogleLoading(false);
+            }
+          }
+        );
+
+        // Render official button into container ref if present
+        if (googleBtnContainerRef.current) {
+          const rendered = renderGoogleSignInButton(googleBtnContainerRef.current, {
+            theme: 'filled_black',
+            size: 'large',
+            text: 'continue_with',
+            shape: 'rectangular',
+            logo_alignment: 'left',
+            width: 340
+          });
+          setIsGoogleRendered(rendered);
+        }
+      }
+    } catch (err: any) {
+      console.error('[Darkano Auth] Failed to initialize Google Auth:', err);
+      if (isMountedRef.current) {
+        setSdkStatus('error');
+      }
+    }
+  }, [getGoogleAuthConfig, onGoogleLogin, clearAuthError]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    initGoogleAuth();
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [initGoogleAuth]);
+
+  // Attempt rendering official button whenever SDK becomes ready and container is mounted
+  useEffect(() => {
+    if (
+      sdkStatus === 'ready' &&
+      googleConfig.configured &&
+      googleConfig.clientId &&
+      googleBtnContainerRef.current &&
+      !isGoogleRendered
+    ) {
+      const rendered = renderGoogleSignInButton(googleBtnContainerRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        text: 'continue_with',
+        shape: 'rectangular',
+        logo_alignment: 'left',
+        width: 340
+      });
+      setIsGoogleRendered(rendered);
+    }
+  }, [sdkStatus, googleConfig, isGoogleRendered]);
+
+  // Handler for retry button when SDK fails to load
+  const handleRetryLoadSdk = async () => {
+    setClientError(null);
+    clearAuthError();
+    await initGoogleAuth(true);
+  };
+
+  const handleGoogleSignInClick = () => {
+    setClientError(null);
+    clearAuthError();
+
+    if (!googleConfig.configured || !googleConfig.clientId) {
+      setClientError(
+        'Google authentication is not configured yet. Please configure GOOGLE_CLIENT_ID in your environment variables (.env file or project settings).'
+      );
+      return;
+    }
+
+    // If SDK is still loading, wait and trigger prompt
+    if (sdkStatus === 'loading') {
+      setIsGoogleLoading(true);
+      loadGoogleSdk()
+        .then(() => {
+          if (isMountedRef.current) {
+            setSdkStatus('ready');
+            setIsGoogleLoading(false);
+            promptGoogleOneTap();
+          }
+        })
+        .catch(() => {
+          if (isMountedRef.current) {
+            setIsGoogleLoading(false);
+            setSdkStatus('error');
+            setClientError(
+              'Google Identity Services SDK could not be loaded. Please check your internet connection or ad blocker and try again.'
+            );
+          }
+        });
+      return;
+    }
+
+    // If SDK previously failed, retry loading
+    if (sdkStatus === 'error' || !isGoogleSdkLoaded()) {
+      setIsGoogleLoading(true);
+      loadGoogleSdk(true)
+        .then(() => {
+          if (isMountedRef.current) {
+            setSdkStatus('ready');
+            setIsGoogleLoading(false);
+            promptGoogleOneTap();
+          }
+        })
+        .catch(() => {
+          if (isMountedRef.current) {
+            setIsGoogleLoading(false);
+            setSdkStatus('error');
+            setClientError(
+              'Google Identity Services SDK could not be loaded. Please verify your internet connection or ad blocker and try again.'
+            );
+          }
+        });
+      return;
+    }
+
+    // SDK is confirmed ready; trigger OAuth2 Token Client immediately and synchronously
+    setIsGoogleLoading(true);
+
+    if (typeof window !== 'undefined' && window.google?.accounts?.oauth2) {
+      requestGoogleAccessToken(
+        googleConfig.clientId,
+        async (accessToken) => {
+          try {
+            await onGoogleLogin(accessToken);
+          } catch (err: any) {
+            if (isMountedRef.current) {
+              setClientError(err?.message || 'Google authentication failed');
+            }
+          } finally {
+            if (isMountedRef.current) {
+              setIsGoogleLoading(false);
+            }
+          }
+        },
+        (err) => {
+          if (isMountedRef.current) {
+            setIsGoogleLoading(false);
+            setClientError(err.message || 'Google authentication failed');
+          }
+        },
+        () => {
+          if (isMountedRef.current) {
+            setIsGoogleLoading(false);
+          }
+        }
+      );
+      return;
+    }
+
+    // Fallback: Prompt One-Tap
+    if (typeof window !== 'undefined' && window.google?.accounts?.id) {
+      try {
+        promptGoogleOneTap((notification: any) => {
+          if (notification?.isNotDisplayed?.()) {
+            if (isMountedRef.current) {
+              setIsGoogleLoading(false);
+              setClientError(
+                'Google Sign-In prompt was blocked by browser security settings. Please allow popups or open in a new tab.'
+              );
+            }
+          } else if (notification?.isSkippedMoment?.() || notification?.isDismissedMoment?.()) {
+            if (isMountedRef.current) {
+              setIsGoogleLoading(false);
+            }
+          }
+        });
+      } catch (promptErr: any) {
+        if (isMountedRef.current) {
+          setIsGoogleLoading(false);
+          setClientError(promptErr?.message || 'Failed to trigger Google sign-in');
+        }
+      }
+      return;
+    }
+
+    setIsGoogleLoading(false);
+    setClientError('Google Identity Services SDK is not ready yet. Please retry.');
+  };
+
+  const handleOpenInNewTab = () => {
+    if (typeof window !== 'undefined') {
+      window.open(window.location.href, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const handleTryOneTap = () => {
+    setClientError(null);
+    clearAuthError();
+    promptGoogleOneTap();
+  };
 
   // Forgot / Reset Password state
   const [resetStep, setResetStep] = useState<'request' | 'submit'>('request');
@@ -241,11 +531,110 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             </div>
           )}
 
+          {/* Social Authentication: CONTINUE WITH GOOGLE */}
+          {mode !== 'forgot' && (
+            <div className="space-y-3.5 pt-0.5">
+              <div className="w-full flex flex-col items-center justify-center">
+                {/* Official Google Button (FedCM & native click support without popup blocking) */}
+                <div
+                  ref={googleBtnContainerRef}
+                  id="google-official-btn-container"
+                  className={`w-full flex items-center justify-center min-h-[44px] transition-all ${
+                    sdkStatus === 'ready' && isGoogleRendered ? 'block' : 'hidden'
+                  }`}
+                />
+
+                {/* Cyber Button (shown during loading, fallback, or when official button isn't mounted) */}
+                {(!isGoogleRendered || sdkStatus !== 'ready') && (
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignInClick}
+                    disabled={isLoading || isGoogleLoading}
+                    className="w-full flex items-center justify-center gap-3 py-2.5 px-4 rounded-xl bg-[#14060c] hover:bg-[#1f0a14] border border-rose-950/80 hover:border-rose-700/60 text-white font-semibold text-xs tracking-wider transition-all shadow-[0_0_20px_rgba(0,0,0,0.5)] disabled:opacity-50 cursor-pointer"
+                    id="continue-with-google-btn"
+                  >
+                    {isGoogleLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 text-rose-400 animate-spin" />
+                        <span>Connecting to Google...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            fill="#4285F4"
+                            d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
+                          />
+                          <path
+                            fill="#EA4335"
+                            d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+                          />
+                        </svg>
+                        <span>CONTINUE WITH GOOGLE</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              <div className="relative flex items-center justify-center py-0.5">
+                <div className="border-t border-rose-950/60 w-full" />
+                <span className="bg-[#0c0307] px-3 text-[10px] uppercase font-mono tracking-wider text-slate-400 shrink-0">
+                  Or continue with email
+                </span>
+                <div className="border-t border-rose-950/60 w-full" />
+              </div>
+            </div>
+          )}
+
           {/* Error Message Box */}
           {activeError && (
             <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/50 text-xs text-rose-200 flex items-start gap-2.5 animate-in fade-in duration-150">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <div className="flex-1 leading-snug">{activeError}</div>
+              <div className="flex-1 leading-snug space-y-2">
+                <div>{activeError}</div>
+                {(activeError.toLowerCase().includes('popup') || activeError.toLowerCase().includes('blocked')) && (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleOpenInNewTab}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-900/70 hover:bg-rose-800/90 border border-rose-700/60 text-white text-[11px] font-medium transition-colors cursor-pointer shadow-sm"
+                      id="open-in-new-tab-btn"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-rose-200" />
+                      <span>Open in New Tab to Sign In</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTryOneTap}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/50 hover:bg-black/80 border border-rose-900/50 text-rose-300 text-[11px] font-medium transition-colors cursor-pointer"
+                      id="try-one-tap-btn"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Try One-Tap Prompt</span>
+                    </button>
+                  </div>
+                )}
+                {(sdkStatus === 'error' || activeError.includes('Google Identity Services')) && (
+                  <button
+                    type="button"
+                    onClick={handleRetryLoadSdk}
+                    className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-rose-300 hover:text-rose-100 underline decoration-rose-500/50 underline-offset-2 transition-colors cursor-pointer"
+                    id="retry-load-google-sdk-btn"
+                  >
+                    <RefreshCw className="w-3 h-3 text-rose-400" />
+                    <span>Retry loading Google Sign-In</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
