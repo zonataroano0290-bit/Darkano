@@ -11,6 +11,7 @@ import {
   ProjectFramework,
   ProjectLanguage
 } from '../types.js';
+import { CollaborationService, CollaborationAccessError } from '../services/collaborationService.js';
 
 export class ProjectPathSecurityError extends Error {
   constructor(message: string) {
@@ -92,22 +93,46 @@ export class ProjectService {
   }
 
   /**
-   * List all projects belonging to the authenticated user.
+   * List all projects belonging to or shared with the authenticated user.
    */
   static listProjects(userId: string): ProjectRecord[] {
     return db.prepare(`
-      SELECT id, userId, name, description, framework, language, status, createdAt, updatedAt
-      FROM projects
-      WHERE userId = ?
-      ORDER BY updatedAt DESC
-    `).all(userId) as unknown as ProjectRecord[];
+      SELECT 
+        p.id, 
+        p.userId, 
+        p.name, 
+        p.description, 
+        p.framework, 
+        p.language, 
+        p.status, 
+        p.createdAt, 
+        p.updatedAt,
+        CASE 
+          WHEN p.userId = ? THEN 'owner'
+          ELSE COALESCE(pm.role, 'viewer')
+        END as currentUserRole,
+        (SELECT COUNT(*) FROM project_members WHERE projectId = p.id AND status = 'active') + 1 as membersCount
+      FROM projects p
+      LEFT JOIN project_members pm ON p.id = pm.projectId AND pm.userId = ? AND pm.status = 'active'
+      WHERE p.userId = ? OR pm.userId = ?
+      ORDER BY p.updatedAt DESC
+    `).all(userId, userId, userId, userId) as unknown as ProjectRecord[];
   }
 
   /**
-   * Get single project details with ownership check.
+   * Get single project details with membership and role check.
    */
   static getProject(userId: string, projectId: string): ProjectRecord {
-    return this.verifyOwnership(userId, projectId);
+    const { project, role } = CollaborationService.getProjectAccess(userId, projectId);
+    const countRow = db.prepare(`
+      SELECT COUNT(*) as count FROM project_members WHERE projectId = ? AND status = 'active'
+    `).get(projectId) as { count: number } | undefined;
+
+    return {
+      ...project,
+      currentUserRole: role,
+      membersCount: (countRow?.count || 0) + 1
+    };
   }
 
   /**
@@ -200,13 +225,13 @@ export class ProjectService {
   }
 
   /**
-   * List all files in a project
+   * List all files in a project (viewers, editors, owners)
    */
   static listFiles(userId: string, projectId: string): ProjectFileRecord[] {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'viewer');
 
     return db.prepare(`
-      SELECT id, projectId, path, content, fileType, size, createdAt, updatedAt
+      SELECT id, projectId, path, content, fileType, size, version, lastModifiedBy, createdAt, updatedAt
       FROM project_files
       WHERE projectId = ?
       ORDER BY fileType ASC, path ASC
@@ -214,14 +239,14 @@ export class ProjectService {
   }
 
   /**
-   * Get single file content
+   * Get single file content (viewers, editors, owners)
    */
   static getFile(userId: string, projectId: string, rawPath: string): ProjectFileRecord {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'viewer');
     const cleanPath = this.normalizeAndValidatePath(rawPath);
 
     const file = db.prepare(`
-      SELECT id, projectId, path, content, fileType, size, createdAt, updatedAt
+      SELECT id, projectId, path, content, fileType, size, version, lastModifiedBy, createdAt, updatedAt
       FROM project_files
       WHERE projectId = ? AND path = ?
     `).get(projectId, cleanPath) as ProjectFileRecord | undefined;
@@ -234,10 +259,10 @@ export class ProjectService {
   }
 
   /**
-   * Create a new file in the project
+   * Create a new file in the project (editors, owners)
    */
   static createFile(userId: string, projectId: string, rawPath: string, content: string = '', fileType: 'file' | 'directory' = 'file'): ProjectFileRecord {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
     const cleanPath = this.normalizeAndValidatePath(rawPath);
 
     const existing = db.prepare(`SELECT id FROM project_files WHERE projectId = ? AND path = ?`).get(projectId, cleanPath);
@@ -250,12 +275,14 @@ export class ProjectService {
     const size = Buffer.byteLength(content, 'utf8');
 
     db.prepare(`
-      INSERT INTO project_files (id, projectId, path, content, fileType, size, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(fileId, projectId, cleanPath, content, fileType, size, now, now);
+      INSERT INTO project_files (id, projectId, path, content, fileType, size, version, lastModifiedBy, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+    `).run(fileId, projectId, cleanPath, content, fileType, size, userId, now, now);
 
     // Update project updatedAt
     db.prepare(`UPDATE projects SET updatedAt = ? WHERE id = ?`).run(now, projectId);
+
+    CollaborationService.recordActivity(projectId, userId, 'file_created', 'file', fileId, { path: cleanPath });
 
     return {
       id: fileId,
@@ -264,16 +291,25 @@ export class ProjectService {
       content,
       fileType,
       size,
+      version: 1,
+      lastModifiedBy: userId,
       createdAt: now,
       updatedAt: now
     };
   }
 
   /**
-   * Update file content
+   * Update file content with version conflict detection (editors, owners)
    */
-  static updateFile(userId: string, projectId: string, rawPath: string, content: string): ProjectFileRecord {
-    this.verifyOwnership(userId, projectId);
+  static updateFile(
+    userId: string,
+    projectId: string,
+    rawPath: string,
+    content: string,
+    expectedVersion?: number,
+    force?: boolean
+  ): ProjectFileRecord {
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
     const cleanPath = this.normalizeAndValidatePath(rawPath);
 
     const existing = db.prepare(`SELECT id, fileType FROM project_files WHERE projectId = ? AND path = ?`).get(projectId, cleanPath) as { id: string; fileType: string } | undefined;
@@ -282,34 +318,21 @@ export class ProjectService {
       return this.createFile(userId, projectId, cleanPath, content);
     }
 
-    const now = new Date().toISOString();
-    const size = Buffer.byteLength(content, 'utf8');
-
-    db.prepare(`
-      UPDATE project_files
-      SET content = ?, size = ?, updatedAt = ?
-      WHERE id = ? AND projectId = ?
-    `).run(content, size, now, existing.id, projectId);
-
-    db.prepare(`UPDATE projects SET updatedAt = ? WHERE id = ?`).run(now, projectId);
-
-    return {
-      id: existing.id,
+    return CollaborationService.saveFileWithConflictCheck({
+      userId,
       projectId,
-      path: cleanPath,
+      fileId: existing.id,
       content,
-      fileType: existing.fileType as 'file' | 'directory',
-      size,
-      createdAt: now,
-      updatedAt: now
-    };
+      expectedVersion,
+      force
+    });
   }
 
   /**
-   * Rename a file
+   * Rename a file (editors, owners)
    */
   static renameFile(userId: string, projectId: string, rawOldPath: string, rawNewPath: string): ProjectFileRecord {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
     const oldPath = this.normalizeAndValidatePath(rawOldPath);
     const newPath = this.normalizeAndValidatePath(rawNewPath);
 
@@ -317,7 +340,7 @@ export class ProjectService {
       return this.getFile(userId, projectId, oldPath);
     }
 
-    const file = db.prepare(`SELECT id, content, fileType FROM project_files WHERE projectId = ? AND path = ?`).get(projectId, oldPath) as { id: string; content: string; fileType: string } | undefined;
+    const file = db.prepare(`SELECT id, content, fileType, version FROM project_files WHERE projectId = ? AND path = ?`).get(projectId, oldPath) as { id: string; content: string; fileType: string; version: number } | undefined;
     if (!file) {
       throw new Error(`Source file not found: ${oldPath}`);
     }
@@ -330,11 +353,13 @@ export class ProjectService {
     const now = new Date().toISOString();
     db.prepare(`
       UPDATE project_files
-      SET path = ?, updatedAt = ?
+      SET path = ?, lastModifiedBy = ?, updatedAt = ?
       WHERE id = ? AND projectId = ?
-    `).run(newPath, now, file.id, projectId);
+    `).run(newPath, userId, now, file.id, projectId);
 
     db.prepare(`UPDATE projects SET updatedAt = ? WHERE id = ?`).run(now, projectId);
+
+    CollaborationService.recordActivity(projectId, userId, 'file_renamed', 'file', file.id, { oldPath, newPath });
 
     return {
       id: file.id,
@@ -343,32 +368,37 @@ export class ProjectService {
       content: file.content,
       fileType: file.fileType as 'file' | 'directory',
       size: Buffer.byteLength(file.content, 'utf8'),
+      version: file.version || 1,
+      lastModifiedBy: userId,
       createdAt: now,
       updatedAt: now
     };
   }
 
   /**
-   * Delete a file
+   * Delete a file (editors, owners)
    */
   static deleteFile(userId: string, projectId: string, rawPath: string): boolean {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
     const cleanPath = this.normalizeAndValidatePath(rawPath);
+
+    const file = db.prepare(`SELECT id FROM project_files WHERE projectId = ? AND path = ?`).get(projectId, cleanPath) as { id: string } | undefined;
 
     const res = db.prepare(`DELETE FROM project_files WHERE projectId = ? AND path = ?`).run(projectId, cleanPath);
     if (res.changes > 0) {
       const now = new Date().toISOString();
       db.prepare(`UPDATE projects SET updatedAt = ? WHERE id = ?`).run(now, projectId);
+      CollaborationService.recordActivity(projectId, userId, 'file_deleted', 'file', file?.id || cleanPath, { path: cleanPath });
       return true;
     }
     return false;
   }
 
   /**
-   * Create folder entry or directory structure
+   * Create folder entry or directory structure (editors, owners)
    */
   static createFolder(userId: string, projectId: string, rawFolderPath: string): ProjectFileRecord {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
     const cleanPath = this.normalizeAndValidatePath(rawFolderPath, true);
 
     const existing = db.prepare(`SELECT id FROM project_files WHERE projectId = ? AND path = ?`).get(projectId, cleanPath);
@@ -380,10 +410,10 @@ export class ProjectService {
   }
 
   /**
-   * Rename folder and update all nested file paths
+   * Rename folder and update all nested file paths (editors, owners)
    */
   static renameFolder(userId: string, projectId: string, oldFolder: string, newFolder: string): { renamedCount: number } {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
     const cleanOld = this.normalizeAndValidatePath(oldFolder, true).replace(/\/$/, '');
     const cleanNew = this.normalizeAndValidatePath(newFolder, true).replace(/\/$/, '');
 
@@ -404,14 +434,15 @@ export class ProjectService {
     }
 
     db.prepare(`UPDATE projects SET updatedAt = ? WHERE id = ?`).run(now, projectId);
+    CollaborationService.recordActivity(projectId, userId, 'folder_renamed', 'folder', null, { oldFolder: cleanOld, newFolder: cleanNew });
     return { renamedCount: count };
   }
 
   /**
-   * Delete folder and all its contents
+   * Delete folder and all its contents (editors, owners)
    */
   static deleteFolder(userId: string, projectId: string, rawFolder: string): { deletedCount: number } {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
     const cleanFolder = this.normalizeAndValidatePath(rawFolder, true).replace(/\/$/, '');
 
     const res = db.prepare(`
@@ -421,15 +452,16 @@ export class ProjectService {
 
     const now = new Date().toISOString();
     db.prepare(`UPDATE projects SET updatedAt = ? WHERE id = ?`).run(now, projectId);
+    CollaborationService.recordActivity(projectId, userId, 'folder_deleted', 'folder', null, { folder: cleanFolder });
 
     return { deletedCount: Number(res.changes) };
   }
 
   /**
-   * Snapshots: Create full snapshot of all project files
+   * Snapshots: Create full snapshot of all project files (editors, owners)
    */
   static createSnapshot(userId: string, projectId: string, description: string): ProjectSnapshotRecord {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
 
     const files = db.prepare(`
       SELECT path, content, fileType
@@ -446,6 +478,8 @@ export class ProjectService {
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(snapshotId, projectId, userId, description.trim() || 'Snapshot created', filesJson, now);
 
+    CollaborationService.recordActivity(projectId, userId, 'snapshot_created', 'snapshot', snapshotId, { description });
+
     return {
       id: snapshotId,
       projectId,
@@ -457,10 +491,10 @@ export class ProjectService {
   }
 
   /**
-   * List all snapshots for a project
+   * List all snapshots for a project (viewers, editors, owners)
    */
   static listSnapshots(userId: string, projectId: string): ProjectSnapshotRecord[] {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'viewer');
 
     return db.prepare(`
       SELECT id, projectId, createdBy, description, filesJson, createdAt
@@ -471,10 +505,10 @@ export class ProjectService {
   }
 
   /**
-   * Rollback project files to a previous snapshot
+   * Rollback project files to a previous snapshot (editors, owners)
    */
   static rollbackSnapshot(userId: string, projectId: string, snapshotId: string): { success: boolean; restoredFileCount: number } {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
 
     const snapshot = db.prepare(`
       SELECT id, filesJson, description
@@ -519,10 +553,10 @@ export class ProjectService {
   }
 
   /**
-   * Build records
+   * Build records (editors, owners)
    */
   static createBuild(userId: string, projectId: string, command: string): ProjectBuildRecord {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
 
     const buildId = `build_${crypto.randomUUID().replace(/-/g, '')}`;
     const now = new Date().toISOString();
@@ -531,6 +565,8 @@ export class ProjectService {
       INSERT INTO project_builds (id, projectId, userId, status, command, output, errors, startedAt, completedAt, durationMs)
       VALUES (?, ?, ?, 'running', ?, '', NULL, ?, NULL, 0)
     `).run(buildId, projectId, userId, command, now);
+
+    CollaborationService.recordActivity(projectId, userId, 'build_started', 'build', buildId, { command });
 
     return {
       id: buildId,
@@ -556,7 +592,7 @@ export class ProjectService {
   }
 
   static listBuilds(userId: string, projectId: string): ProjectBuildRecord[] {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'viewer');
 
     return db.prepare(`
       SELECT id, projectId, userId, status, command, output, errors, startedAt, completedAt, durationMs
@@ -568,7 +604,7 @@ export class ProjectService {
   }
 
   static getLatestBuild(userId: string, projectId: string): ProjectBuildRecord | null {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'viewer');
 
     const row = db.prepare(`
       SELECT id, projectId, userId, status, command, output, errors, startedAt, completedAt, durationMs
@@ -582,7 +618,7 @@ export class ProjectService {
   }
 
   /**
-   * Safe Patch Proposals System
+   * Safe Patch Proposals System (editors, owners)
    */
   static createPatch(params: {
     userId: string;
@@ -593,7 +629,7 @@ export class ProjectService {
     diffSummary: string;
   }): ProjectPatchRecord {
     const { userId, projectId, path: rawPath, originalContent, proposedContent, diffSummary } = params;
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
     const cleanPath = this.normalizeAndValidatePath(rawPath);
 
     const patchId = `patch_${crypto.randomUUID().replace(/-/g, '')}`;
@@ -619,7 +655,7 @@ export class ProjectService {
   }
 
   static listPendingPatches(userId: string, projectId: string): ProjectPatchRecord[] {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'viewer');
 
     return db.prepare(`
       SELECT id, projectId, userId, path, originalContent, proposedContent, diffSummary, status, createdAt, appliedAt
@@ -630,13 +666,13 @@ export class ProjectService {
   }
 
   static applyPatch(userId: string, projectId: string, patchId: string): { success: boolean; patch: ProjectPatchRecord; updatedFile: ProjectFileRecord } {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
 
     const patch = db.prepare(`
       SELECT id, projectId, userId, path, originalContent, proposedContent, diffSummary, status, createdAt, appliedAt
       FROM project_changes
-      WHERE id = ? AND projectId = ? AND userId = ?
-    `).get(patchId, projectId, userId) as ProjectPatchRecord | undefined;
+      WHERE id = ? AND projectId = ?
+    `).get(patchId, projectId) as ProjectPatchRecord | undefined;
 
     if (!patch) {
       throw new Error('Patch proposal not found.');
@@ -666,22 +702,22 @@ export class ProjectService {
   }
 
   static rejectPatch(userId: string, projectId: string, patchId: string): boolean {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
 
     const res = db.prepare(`
       UPDATE project_changes
       SET status = 'rejected'
-      WHERE id = ? AND projectId = ? AND userId = ? AND status = 'pending'
-    `).run(patchId, projectId, userId);
+      WHERE id = ? AND projectId = ? AND status = 'pending'
+    `).run(patchId, projectId);
 
     return res.changes > 0;
   }
 
   /**
-   * Environment Variables (Masked Secret Storage)
+   * Environment Variables (Masked Secret Storage - OWNER only)
    */
   static setEnvVar(userId: string, projectId: string, key: string, value: string): void {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'owner');
 
     const cleanKey = key.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
     if (!cleanKey) {
@@ -703,9 +739,10 @@ export class ProjectService {
   /**
    * List environment variables for the frontend.
    * STRICT SECURITY: NEVER expose secret values to the browser!
+   * EDITORS and OWNERS only. Viewers are blocked from secret configurations.
    */
   static listEnvVars(userId: string, projectId: string): ProjectEnvVarRecord[] {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
 
     const rows = db.prepare(`
       SELECT id, projectId, key, createdAt, updatedAt
@@ -721,7 +758,7 @@ export class ProjectService {
   }
 
   static deleteEnvVar(userId: string, projectId: string, key: string): boolean {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'owner');
     const cleanKey = key.trim().toUpperCase();
 
     const res = db.prepare(`
@@ -737,7 +774,7 @@ export class ProjectService {
    * NEVER exposed via API.
    */
   static getInternalEnvVars(userId: string, projectId: string): Record<string, string> {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'editor');
 
     const rows = db.prepare(`
       SELECT key, valueEncrypted
@@ -760,7 +797,7 @@ export class ProjectService {
     matchType: 'filename' | 'content';
     matches: Array<{ lineNumber: number; line: string }>;
   }> {
-    this.verifyOwnership(userId, projectId);
+    CollaborationService.verifyAccess(userId, projectId, 'viewer');
     const q = query.trim().toLowerCase();
     if (!q) return [];
 

@@ -66,6 +66,13 @@ export const AdminModal: React.FC = () => {
   const [selectedRole, setSelectedRole] = useState<'user' | 'admin' | 'owner'>('user');
   const [isUpdatingRole, setIsUpdatingRole] = useState<boolean>(false);
 
+  // Production Hardening & System Maintenance Sub-state
+  const [isMaintenanceRunning, setIsMaintenanceRunning] = useState<boolean>(false);
+  const [maintenanceReport, setMaintenanceReport] = useState<any | null>(null);
+  const [backupResult, setBackupResult] = useState<any | null>(null);
+  const [integrityResult, setIntegrityResult] = useState<any | null>(null);
+  const [ledgerResult, setLedgerResult] = useState<any | null>(null);
+
   const fetchStats = useCallback(async () => {
     if (!token || !isAdmin) return;
     try {
@@ -236,6 +243,109 @@ export const AdminModal: React.FC = () => {
       setErrorMsg(err?.message || 'Role update failed');
     } finally {
       setIsUpdatingRole(false);
+    }
+  };
+
+  // Maintenance & Hardening Handlers
+  const handleRunCleanup = async () => {
+    if (!token || !isAdmin) return;
+    setIsMaintenanceRunning(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const res = await fetch('/api/admin/maintenance/cleanup', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMaintenanceReport(data.report);
+        setSuccessMsg(`System maintenance executed: ${data.report.sessionsCleaned} sessions, ${data.report.passwordResetsCleaned} resets, ${data.report.orphanedSandboxesCleaned} sandboxes cleaned.`);
+        fetchAuditLogs();
+      } else {
+        setErrorMsg(data.error || 'Maintenance cleanup failed.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Network error during maintenance cleanup.');
+    } finally {
+      setIsMaintenanceRunning(false);
+    }
+  };
+
+  const handleCreateBackup = async () => {
+    if (!token || !isAdmin) return;
+    setIsMaintenanceRunning(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const res = await fetch('/api/admin/maintenance/backup', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBackupResult(data.backup);
+        setSuccessMsg(`Hot database snapshot saved: ${data.backup.backupFileName} (${(data.backup.sizeBytes / 1024).toFixed(1)} KB, ${data.backup.retainedBackupsCount} retained snapshots).`);
+        fetchAuditLogs();
+      } else {
+        setErrorMsg(data.error || 'Database backup failed.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Network error creating backup.');
+    } finally {
+      setIsMaintenanceRunning(false);
+    }
+  };
+
+  const handleCheckIntegrity = async () => {
+    if (!token || !isAdmin) return;
+    setIsMaintenanceRunning(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch('/api/admin/maintenance/integrity', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setIntegrityResult(data);
+        if (data.status === 'ok') {
+          setSuccessMsg('SQLite physical database integrity & foreign keys: 100% OK.');
+        } else {
+          setErrorMsg('Integrity errors detected in database!');
+        }
+      } else {
+        setErrorMsg(data.error || 'Integrity check failed.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Network error checking integrity.');
+    } finally {
+      setIsMaintenanceRunning(false);
+    }
+  };
+
+  const handleAuditLedger = async () => {
+    if (!token || !isAdmin) return;
+    setIsMaintenanceRunning(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch('/api/admin/maintenance/ledger-audit', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setLedgerResult(data);
+        if (data.discrepanciesFound === 0) {
+          setSuccessMsg(`Credit ledger audit passed: ${data.totalUsersChecked} users verified with 0 discrepancies.`);
+        } else {
+          setErrorMsg(`Discrepancies detected across ${data.discrepanciesFound} user account(s).`);
+        }
+      } else {
+        setErrorMsg(data.error || 'Ledger audit failed.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Network error running ledger audit.');
+    } finally {
+      setIsMaintenanceRunning(false);
     }
   };
 
@@ -623,6 +733,134 @@ export const AdminModal: React.FC = () => {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* Production Hardening & System Maintenance Panel */}
+              <div className="p-4 rounded-xl bg-black/40 border border-rose-950/50 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-300">
+                      Production Hardening & System Maintenance
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      Real atomic SQLite snapshots, physical database integrity verification, ledger reconciliation, and stale artifact sweeps.
+                    </p>
+                  </div>
+                  {isMaintenanceRunning && (
+                    <div className="flex items-center gap-1.5 text-xs text-rose-400 font-mono">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Executing...</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <button
+                    disabled={isMaintenanceRunning}
+                    onClick={handleRunCleanup}
+                    className="p-3 rounded-xl bg-white/[0.02] hover:bg-rose-950/40 border border-rose-950/60 hover:border-rose-800/60 text-left transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-semibold text-white mb-1">
+                      <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Run Full Cleanup</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400">Purge expired sessions, tokens, invites, and orphaned sandboxes.</p>
+                  </button>
+
+                  <button
+                    disabled={isMaintenanceRunning}
+                    onClick={handleCreateBackup}
+                    className="p-3 rounded-xl bg-white/[0.02] hover:bg-rose-950/40 border border-rose-950/60 hover:border-rose-800/60 text-left transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-semibold text-white mb-1">
+                      <Database className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Create Hot Backup</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400">Atomic SQLite VACUUM INTO snapshot with automated 7-run retention.</p>
+                  </button>
+
+                  <button
+                    disabled={isMaintenanceRunning}
+                    onClick={handleCheckIntegrity}
+                    className="p-3 rounded-xl bg-white/[0.02] hover:bg-rose-950/40 border border-rose-950/60 hover:border-rose-800/60 text-left transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-semibold text-white mb-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Verify Integrity</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400">Run PRAGMA integrity_check and foreign key constraint validations.</p>
+                  </button>
+
+                  <button
+                    disabled={isMaintenanceRunning}
+                    onClick={handleAuditLedger}
+                    className="p-3 rounded-xl bg-white/[0.02] hover:bg-rose-950/40 border border-rose-950/60 hover:border-rose-800/60 text-left transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-semibold text-white mb-1">
+                      <Coins className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Audit Credit Ledger</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400">Sum transaction ledger entries and verify zero user discrepancies.</p>
+                  </button>
+                </div>
+
+                {/* Maintenance Outputs */}
+                {maintenanceReport && (
+                  <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-900/40 font-mono text-xs text-slate-300 space-y-1">
+                    <div className="font-semibold text-rose-300 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>System Maintenance Execution Report</span>
+                    </div>
+                    <div className="text-[11px] grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-slate-400">
+                      <div>Sessions Purged: <span className="text-white font-bold">{maintenanceReport.sessionsCleaned}</span></div>
+                      <div>Resets Purged: <span className="text-white font-bold">{maintenanceReport.passwordResetsCleaned}</span></div>
+                      <div>Invites Expired: <span className="text-white font-bold">{maintenanceReport.invitationsExpired}</span></div>
+                      <div>Sandboxes Cleaned: <span className="text-white font-bold">{maintenanceReport.orphanedSandboxesCleaned}</span></div>
+                    </div>
+                  </div>
+                )}
+
+                {backupResult && (
+                  <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-900/40 font-mono text-xs text-slate-300 space-y-1">
+                    <div className="font-semibold text-rose-300 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Hot Snapshot Saved: {backupResult.backupFileName}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Size: <span className="text-white">{(backupResult.sizeBytes / 1024).toFixed(1)} KB</span> · Retained Snapshots: <span className="text-white">{backupResult.retainedBackupsCount}</span>
+                    </div>
+                  </div>
+                )}
+
+                {integrityResult && (
+                  <div className={`p-3 rounded-xl border font-mono text-xs space-y-1 ${
+                    integrityResult.status === 'ok' ? 'bg-emerald-950/20 border-emerald-900/40 text-slate-300' : 'bg-rose-950/30 border-rose-900/60 text-rose-300'
+                  }`}>
+                    <div className="font-semibold flex items-center gap-1.5">
+                      {integrityResult.status === 'ok' ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                      )}
+                      <span>PRAGMA Integrity Check: {integrityResult.status.toUpperCase()}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Status: {integrityResult.details.join(', ')} · Foreign Key Violations: {integrityResult.foreignKeyErrors}
+                    </div>
+                  </div>
+                )}
+
+                {ledgerResult && (
+                  <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-900/40 font-mono text-xs text-slate-300 space-y-1">
+                    <div className="font-semibold text-rose-300 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Credit Ledger Audit: {ledgerResult.discrepanciesFound === 0 ? 'Consistent (0 Discrepancies)' : 'Discrepancies Detected'}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Accounts Audited: <span className="text-white">{ledgerResult.totalUsersChecked}</span> · Discrepancy Count: <span className="text-white">{ledgerResult.discrepanciesFound}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

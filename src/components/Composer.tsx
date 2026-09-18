@@ -70,8 +70,13 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
     }
   }, [input]);
 
+  const lastSendTimeRef = useRef<number>(0);
+
   const handleSend = () => {
+    const now = Date.now();
+    if (now - lastSendTimeRef.current < 400) return;
     if ((!input.trim() && stagedComposerFiles.length === 0 && stagedMedia.length === 0) || isGenerating) return;
+    lastSendTimeRef.current = now;
     sendMessage(input, stagedComposerFiles, stagedMedia);
     setInput('');
     if (textareaRef.current) {
@@ -473,6 +478,12 @@ export const Composer: React.FC<ComposerProps> = ({ isCentered = false }) => {
               <button
                 type="button"
                 onClick={handleSend}
+                onPointerDown={(e) => {
+                  if (canSubmit && !isGenerating) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
                 disabled={!canSubmit}
                 className={`flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl transition-all ${
                   canSubmit

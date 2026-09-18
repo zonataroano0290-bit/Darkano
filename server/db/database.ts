@@ -16,6 +16,9 @@ export const db = new DatabaseSync(DB_PATH);
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
+  PRAGMA busy_timeout = 5000;
+  PRAGMA synchronous = NORMAL;
+  PRAGMA cache_size = -64000;
 
   -- 1. Users table
   CREATE TABLE IF NOT EXISTS users (
@@ -452,6 +455,107 @@ db.exec(`
     UNIQUE(projectId, domain)
   );
 
+  -- ==========================================
+  -- PHASE 11: Real Collaboration, Project Sharing & Git Integration
+  -- ==========================================
+
+  -- 32. Project Members System
+  CREATE TABLE IF NOT EXISTS project_members (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'editor', -- 'owner', 'editor', 'viewer'
+    invitedBy TEXT REFERENCES users(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'active', -- 'active', 'invited'
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    UNIQUE(projectId, userId)
+  );
+
+  -- 33. Real Project Invitations
+  CREATE TABLE IF NOT EXISTS project_invitations (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    inviterId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    inviteeEmail TEXT NOT NULL COLLATE NOCASE,
+    inviteeUserId TEXT REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'editor', -- 'editor', 'viewer'
+    token TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'accepted', 'declined', 'expired', 'revoked'
+    expiresAt TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    acceptedAt TEXT
+  );
+
+  -- 34. Shared Project Secure Links
+  CREATE TABLE IF NOT EXISTS project_share_links (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    token TEXT UNIQUE NOT NULL,
+    permission TEXT NOT NULL DEFAULT 'view', -- 'view', 'comment', 'edit'
+    createdBy TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'active', -- 'active', 'revoked'
+    expiresAt TEXT,
+    createdAt TEXT NOT NULL
+  );
+
+  -- 35. Real Database-Backed Project Comments
+  CREATE TABLE IF NOT EXISTS project_comments (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    filePath TEXT,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    lineStart INTEGER,
+    lineEnd INTEGER,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    parentId TEXT REFERENCES project_comments(id) ON DELETE CASCADE,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+
+  -- 36. Real Project Activity & Audit Stream
+  CREATE TABLE IF NOT EXISTS project_activity (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    actorUserId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    eventType TEXT NOT NULL,
+    targetType TEXT,
+    targetId TEXT,
+    metadataJson TEXT,
+    createdAt TEXT NOT NULL
+  );
+
+  -- 37. Real Git Connections
+  CREATE TABLE IF NOT EXISTS git_connections (
+    id TEXT PRIMARY KEY,
+    projectId TEXT UNIQUE NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL DEFAULT 'github', -- 'github', 'gitlab', 'git'
+    repoUrl TEXT NOT NULL,
+    repoName TEXT NOT NULL,
+    defaultBranch TEXT NOT NULL DEFAULT 'main',
+    tokenEncrypted TEXT,
+    status TEXT NOT NULL DEFAULT 'connected', -- 'connected', 'disconnected', 'error'
+    lastSyncAt TEXT,
+    lastCommitHash TEXT,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+
+  -- 38. Real Git Commits
+  CREATE TABLE IF NOT EXISTS git_commits (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    commitHash TEXT NOT NULL,
+    message TEXT NOT NULL,
+    authorName TEXT NOT NULL,
+    authorEmail TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
+    snapshotId TEXT REFERENCES project_snapshots(id) ON DELETE SET NULL,
+    createdAt TEXT NOT NULL
+  );
+
   -- Performance Indexes
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
@@ -496,6 +600,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_deployment_logs_dep ON deployment_logs(deploymentId, timestamp ASC);
   CREATE INDEX IF NOT EXISTS idx_deployment_env_proj ON deployment_environments(projectId, environment);
   CREATE INDEX IF NOT EXISTS idx_deployment_domains_proj ON deployment_domains(projectId);
+  CREATE INDEX IF NOT EXISTS idx_project_members_proj ON project_members(projectId);
+  CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(userId);
+  CREATE INDEX IF NOT EXISTS idx_project_invitations_proj ON project_invitations(projectId);
+  CREATE INDEX IF NOT EXISTS idx_project_invitations_email ON project_invitations(inviteeEmail);
+  CREATE INDEX IF NOT EXISTS idx_project_invitations_token ON project_invitations(token);
+  CREATE INDEX IF NOT EXISTS idx_project_share_links_proj ON project_share_links(projectId);
+  CREATE INDEX IF NOT EXISTS idx_project_share_links_token ON project_share_links(token);
+  CREATE INDEX IF NOT EXISTS idx_project_comments_proj ON project_comments(projectId);
+  CREATE INDEX IF NOT EXISTS idx_project_comments_file ON project_comments(projectId, filePath);
+  CREATE INDEX IF NOT EXISTS idx_project_activity_proj ON project_activity(projectId, createdAt DESC);
+  CREATE INDEX IF NOT EXISTS idx_git_connections_proj ON git_connections(projectId);
+  CREATE INDEX IF NOT EXISTS idx_git_commits_proj ON git_commits(projectId, createdAt DESC);
 `);
 
 // Run column migrations for `users` table safely
@@ -518,6 +634,17 @@ try {
   if (!msgCols.includes('mediaJson')) {
     db.exec(`ALTER TABLE messages ADD COLUMN mediaJson TEXT`);
     console.log('[Darkano Database] Added `mediaJson` column to `messages` table.');
+  }
+
+  const projFilesInfo = db.prepare(`PRAGMA table_info(project_files)`).all() as Array<{ name: string }>;
+  const projFilesCols = projFilesInfo.map(col => col.name);
+  if (!projFilesCols.includes('version')) {
+    db.exec(`ALTER TABLE project_files ADD COLUMN version INTEGER NOT NULL DEFAULT 1`);
+    console.log('[Darkano Database] Added `version` column to `project_files` table.');
+  }
+  if (!projFilesCols.includes('lastModifiedBy')) {
+    db.exec(`ALTER TABLE project_files ADD COLUMN lastModifiedBy TEXT`);
+    console.log('[Darkano Database] Added `lastModifiedBy` column to `project_files` table.');
   }
 } catch (migErr: any) {
   console.warn('[Darkano Database] Migration check notice:', migErr?.message);

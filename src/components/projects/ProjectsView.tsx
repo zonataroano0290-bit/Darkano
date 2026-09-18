@@ -17,7 +17,13 @@ import {
   Eye,
   Terminal,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Rocket,
+  Users,
+  Github,
+  MessageSquare,
+  Lock,
+  Shield
 } from 'lucide-react';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import {
@@ -43,7 +49,10 @@ import { SnapshotsModal } from './SnapshotsModal';
 import { EnvVarsModal } from './EnvVarsModal';
 import { DeploymentsPanel } from './DeploymentsPanel';
 import { ScopedEnvVarsModal } from './ScopedEnvVarsModal';
-import { Rocket } from 'lucide-react';
+import { CollaborationModal } from './CollaborationModal';
+import { GitModal } from './GitModal';
+import { CommentsPanel } from './CommentsPanel';
+import { ConflictModal } from './ConflictModal';
 
 export const ProjectsView: React.FC = () => {
   const { token, currentUser } = useWorkspace();
@@ -68,10 +77,14 @@ export const ProjectsView: React.FC = () => {
   const [qualityChecks, setQualityChecks] = useState<ProjectQualityChecksResult | null>(null);
 
   // UI Tabs & Modals
-  const [rightTab, setRightTab] = useState<'preview' | 'deployments' | 'ai' | 'patches' | 'checks'>('preview');
+  const [rightTab, setRightTab] = useState<'preview' | 'deployments' | 'ai' | 'patches' | 'checks' | 'comments'>('preview');
   const [isSnapshotsModalOpen, setIsSnapshotsModalOpen] = useState(false);
   const [isEnvVarsModalOpen, setIsEnvVarsModalOpen] = useState(false);
   const [isScopedEnvModalOpen, setIsScopedEnvModalOpen] = useState(false);
+  const [isCollaborationModalOpen, setIsCollaborationModalOpen] = useState(false);
+  const [isGitModalOpen, setIsGitModalOpen] = useState(false);
+  const [isConflictModalOpen, setIsConflictModalOpen] = useState(false);
+  const [conflictingServerFile, setConflictingServerFile] = useState<ProjectFileRecord | null>(null);
 
   // Loading flags
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
@@ -95,7 +108,11 @@ export const ProjectsView: React.FC = () => {
     const res = await fetch(url, { ...options, headers });
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || `HTTP ${res.status}`);
+      const error: any = new Error(errJson.error || `HTTP ${res.status}`);
+      error.status = res.status;
+      error.code = errJson.code;
+      error.currentFile = errJson.currentFile;
+      throw error;
     }
     return res.json();
   }, [token]);
@@ -217,20 +234,31 @@ export const ProjectsView: React.FC = () => {
   };
 
   // Save active file
-  const handleSaveFile = async () => {
+  const handleSaveFile = async (force: boolean = false) => {
     if (!activeFile || !selectedProjectId) return;
+    if (activeProject?.currentUserRole === 'viewer') {
+      alert('Read-only: You are a Viewer on this project and cannot save modifications.');
+      return;
+    }
 
     setIsSavingFile(true);
     try {
-      const res = await apiFetch(`/api/projects/${selectedProjectId}/files/${activeFile.id}`, {
+      const res = await apiFetch(`/api/projects/${selectedProjectId}/files`, {
         method: 'PUT',
-        body: JSON.stringify({ content: fileContent })
+        body: JSON.stringify({
+          path: activeFile.path,
+          content: fileContent,
+          expectedVersion: activeFile.version,
+          force
+        })
       });
 
       const updated = res.file;
-      setFiles(prev => prev.map(f => f.id === updated.id ? updated : f));
-      setOpenFiles(prev => prev.map(f => f.id === updated.id ? updated : f));
+      setFiles(prev => prev.map(f => f.path === updated.path ? updated : f));
+      setOpenFiles(prev => prev.map(f => f.path === updated.path ? updated : f));
       setActiveFile(updated);
+      setIsConflictModalOpen(false);
+      setConflictingServerFile(null);
 
       setUnsavedFiles(prev => {
         const next = new Set(prev);
@@ -238,7 +266,20 @@ export const ProjectsView: React.FC = () => {
         return next;
       });
     } catch (err: any) {
-      alert(`Save error: ${err.message}`);
+      if (err.status === 409 || err.code === 'VERSION_CONFLICT' || err.message?.includes('conflict') || err.message?.includes('409')) {
+        setConflictingServerFile(err.currentFile || null);
+        if (!err.currentFile) {
+          try {
+            const serverRes = await apiFetch(`/api/projects/${selectedProjectId}/files/content?path=${encodeURIComponent(activeFile.path)}`);
+            setConflictingServerFile(serverRes.file || null);
+          } catch {
+            // ignore
+          }
+        }
+        setIsConflictModalOpen(true);
+      } else {
+        alert(`Save error: ${err.message}`);
+      }
     } finally {
       setIsSavingFile(false);
     }
@@ -559,6 +600,7 @@ export const ProjectsView: React.FC = () => {
     return (
       <ProjectsList
         projects={projects}
+        token={token}
         onOpenProject={(id) => setSelectedProjectId(id)}
         onCreateProject={handleCreateProject}
         onGenerateAiProject={handleGenerateAiProject}
@@ -594,11 +636,49 @@ export const ProjectsView: React.FC = () => {
             <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 text-rose-300 border border-rose-800/40 uppercase">
               {activeProject.framework}
             </span>
+            {activeProject.currentUserRole && (
+              <span
+                className={`text-[10px] font-semibold px-2 py-0.5 rounded border uppercase ${
+                  activeProject.currentUserRole === 'owner'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                    : activeProject.currentUserRole === 'editor'
+                    ? 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+                    : 'bg-neutral-800 border-neutral-700 text-neutral-300'
+                }`}
+              >
+                {activeProject.currentUserRole}
+              </span>
+            )}
           </div>
         </div>
 
         {/* Global Action Buttons */}
         <div className="flex items-center gap-2">
+          {/* Team & Collaboration */}
+          <button
+            onClick={() => setIsCollaborationModalOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 text-xs font-medium transition-colors"
+            title="Team Members, Invitations & Sharing"
+          >
+            <Users className="w-3.5 h-3.5 text-purple-400" />
+            <span className="hidden sm:inline">Team</span>
+            {(activeProject.membersCount || 1) > 1 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-purple-500/20 text-purple-300 text-[10px] font-mono">
+                {activeProject.membersCount}
+              </span>
+            )}
+          </button>
+
+          {/* Git Integration */}
+          <button
+            onClick={() => setIsGitModalOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 text-xs font-medium transition-colors"
+            title="Git Remote, Commits & Push/Pull"
+          >
+            <Github className="w-3.5 h-3.5 text-slate-300" />
+            <span className="hidden sm:inline">Git</span>
+          </button>
+
           {/* Snapshots Button */}
           <button
             onClick={() => {
@@ -696,6 +776,7 @@ export const ProjectsView: React.FC = () => {
             onSelectFile={handleSelectFile}
             onCloseFile={handleCloseFile}
             isSaving={isSavingFile}
+            readOnly={activeProject.currentUserRole === 'viewer'}
           />
         </div>
 
@@ -768,6 +849,18 @@ export const ProjectsView: React.FC = () => {
                 <Activity className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Checks</span>
               </button>
+
+              <button
+                onClick={() => setRightTab('comments')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                  rightTab === 'comments'
+                    ? 'bg-rose-950/60 text-rose-200 border border-rose-700/40 font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-purple-400" />
+                <span>Discussions</span>
+              </button>
             </div>
           </div>
 
@@ -820,6 +913,15 @@ export const ProjectsView: React.FC = () => {
                 isLoading={isRunningChecks}
               />
             )}
+
+            {rightTab === 'comments' && (
+              <CommentsPanel
+                project={activeProject}
+                activeFile={activeFile}
+                token={token}
+                currentUserId={currentUser?.id || ''}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -850,6 +952,54 @@ export const ProjectsView: React.FC = () => {
         onClose={() => setIsScopedEnvModalOpen(false)}
         projectId={selectedProjectId}
         apiFetch={apiFetch}
+      />
+
+      {/* Collaboration Modal (Phase 11) */}
+      <CollaborationModal
+        isOpen={isCollaborationModalOpen}
+        onClose={() => setIsCollaborationModalOpen(false)}
+        project={activeProject}
+        token={token}
+        currentUserId={currentUser?.id || ''}
+        onProjectUpdated={() => {
+          loadProjectDetails(activeProject.id);
+          loadProjects();
+        }}
+      />
+
+      {/* Git Integration Modal (Phase 11) */}
+      <GitModal
+        isOpen={isGitModalOpen}
+        onClose={() => setIsGitModalOpen(false)}
+        project={activeProject}
+        token={token}
+        onProjectUpdated={() => {
+          loadProjectDetails(activeProject.id);
+          loadProjects();
+        }}
+        onFilesChanged={() => {
+          loadProjectDetails(activeProject.id);
+        }}
+      />
+
+      {/* Version Conflict Modal (Phase 11) */}
+      <ConflictModal
+        isOpen={isConflictModalOpen}
+        onClose={() => setIsConflictModalOpen(false)}
+        filePath={activeFile?.path || ''}
+        localContent={fileContent}
+        serverFile={conflictingServerFile}
+        onForceOverwrite={() => handleSaveFile(true)}
+        onAcceptServerVersion={() => {
+          if (conflictingServerFile) {
+            setFileContent(conflictingServerFile.content);
+            setActiveFile(conflictingServerFile);
+            setFiles(prev => prev.map(f => f.path === conflictingServerFile.path ? conflictingServerFile : f));
+            setOpenFiles(prev => prev.map(f => f.path === conflictingServerFile.path ? conflictingServerFile : f));
+          }
+          setIsConflictModalOpen(false);
+          setConflictingServerFile(null);
+        }}
       />
     </div>
   );

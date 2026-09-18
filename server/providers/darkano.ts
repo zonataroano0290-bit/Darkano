@@ -191,9 +191,13 @@ export class DarkanoProvider extends BaseAIProvider {
     }
 
     // Select primary model based on Darkano specification
-    let targetModel = 'gemini-3.8-flash';
-    if (options.model === 'darkano-flash-v2') {
-      targetModel = 'gemini-3.1-flash-lite';
+    let targetModel = 'gemini-3.5-flash-lite';
+    if (options.model === 'darkano-ultra-v2') {
+      targetModel = 'gemini-3.5-flash';
+    } else if (options.model === 'darkano-code-x') {
+      targetModel = 'gemini-3.5-flash';
+    } else if (options.model === 'darkano-flash-v2') {
+      targetModel = 'gemini-3.5-flash-lite';
     }
 
     // If research mode is active, enable Google Search Grounding
@@ -217,20 +221,8 @@ export class DarkanoProvider extends BaseAIProvider {
       try {
         responseStream = await tryGenerate(targetModel);
       } catch (firstErr: any) {
-        const errMsg = String(firstErr?.message || '');
-        if (
-          errMsg.includes('503') ||
-          errMsg.includes('429') ||
-          errMsg.includes('Quota') ||
-          errMsg.includes('RESOURCE_EXHAUSTED') ||
-          errMsg.includes('UNAVAILABLE') ||
-          errMsg.includes('high demand')
-        ) {
-          console.warn(`[Darkano] Primary model ${targetModel} busy/rate-limited, falling back to resilient secondary...`);
-          responseStream = await tryGenerate('gemini-3.1-flash-lite');
-        } else {
-          throw firstErr;
-        }
+        console.warn(`[Darkano] Primary model ${targetModel} issue (${firstErr?.message}), falling back to gemini-3.5-flash-lite...`);
+        responseStream = await tryGenerate('gemini-3.5-flash-lite');
       }
 
       let promptTokens = 0;
@@ -347,15 +339,29 @@ export class DarkanoProvider extends BaseAIProvider {
     const contents = this.sanitizeContents(options.history, options.message);
 
     try {
-      const response = await client.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents,
-        config: {
-          systemInstruction: options.resolvedSystemPrompt,
-          temperature: options.options?.temperature ?? 0.7,
-          topP: options.options?.topP ?? 0.95
-        }
-      });
+      const modelToUse = options.model === 'darkano-flash-v2' ? 'gemini-3.5-flash-lite' : 'gemini-3.5-flash';
+      let response;
+      try {
+        response = await client.models.generateContent({
+          model: modelToUse,
+          contents,
+          config: {
+            systemInstruction: options.resolvedSystemPrompt,
+            temperature: options.options?.temperature ?? 0.7,
+            topP: options.options?.topP ?? 0.95
+          }
+        });
+      } catch {
+        response = await client.models.generateContent({
+          model: 'gemini-3.5-flash-lite',
+          contents,
+          config: {
+            systemInstruction: options.resolvedSystemPrompt,
+            temperature: options.options?.temperature ?? 0.7,
+            topP: options.options?.topP ?? 0.95
+          }
+        });
+      }
 
       const text = response.text || '';
       const latencyMs = Date.now() - startTime;

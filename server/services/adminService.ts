@@ -374,4 +374,38 @@ export class AdminService {
       limit
     };
   }
+
+  /**
+   * Record an immutable administrative action in the audit log
+   */
+  static logAction(params: {
+    adminId: string;
+    adminEmail: string;
+    action: string;
+    targetType: string;
+    targetId?: string;
+    details?: any;
+  }): void {
+    try {
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const metadataJson = params.details ? JSON.stringify(params.details) : null;
+
+      db.prepare(`
+        INSERT INTO audit_logs (id, actorId, actorEmail, action, targetId, targetType, metadataJson, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        params.adminId,
+        params.adminEmail,
+        params.action,
+        params.targetId || null,
+        params.targetType,
+        metadataJson,
+        now
+      );
+    } catch (err) {
+      console.warn('[AdminService] Failed to record audit log:', err);
+    }
+  }
 }

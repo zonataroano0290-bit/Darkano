@@ -1014,7 +1014,9 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
+        // Normalize CRLF to LF for reliable cross-browser/cross-platform SSE event segmentation
+        const normalized = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const lines = normalized.split('\n\n');
         buffer = lines.pop() || '';
 
         for (const block of lines) {
@@ -1023,11 +1025,12 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           let eventType = 'chunk';
           let dataStr = '';
 
-          for (const line of block.split('\n')) {
-            if (line.startsWith('event: ')) {
-              eventType = line.slice(7).trim();
-            } else if (line.startsWith('data: ')) {
-              dataStr = line.slice(6).trim();
+          for (const rawLine of block.split('\n')) {
+            const line = rawLine.trim();
+            if (line.startsWith('event:')) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              dataStr = line.slice(5).trim();
             }
           }
 
@@ -1036,7 +1039,28 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           try {
             const parsed = JSON.parse(dataStr);
 
-            if (eventType === 'stage') {
+            if (eventType === 'start') {
+              // Immediately transition assistant status from 'loading' to 'streaming'
+              setConversations(prev =>
+                prev.map(c => {
+                  if (c.id === targetConvId) {
+                    return {
+                      ...c,
+                      messages: c.messages.map(m => {
+                        if (m.id === assistantMessageId) {
+                          return {
+                            ...m,
+                            status: 'streaming'
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return c;
+                })
+              );
+            } else if (eventType === 'stage') {
               let stageLabel = '';
               let agentUpdater: ((prev: any) => any) | null = null;
 
@@ -1285,6 +1309,51 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           }
         }
       }
+
+      // Process any residual data in buffer
+      if (buffer.trim()) {
+        const remainingBlocks = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n\n');
+        for (const block of remainingBlocks) {
+          if (!block.trim()) continue;
+          let eventType = 'chunk';
+          let dataStr = '';
+          for (const rawLine of block.split('\n')) {
+            const line = rawLine.trim();
+            if (line.startsWith('event:')) eventType = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataStr = line.slice(5).trim();
+          }
+          if (dataStr) {
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (eventType === 'chunk' && typeof parsed.text === 'string') {
+                accumulatedText += parsed.text;
+              }
+            } catch {}
+          }
+        }
+      }
+
+      // Guarantee assistant message status is finalized to 'ready'
+      setConversations(prev =>
+        prev.map(c => {
+          if (c.id === targetConvId) {
+            return {
+              ...c,
+              messages: c.messages.map(m => {
+                if (m.id === assistantMessageId && (m.status === 'loading' || m.status === 'streaming')) {
+                  return {
+                    ...m,
+                    content: accumulatedText || m.content || '',
+                    status: (accumulatedText.trim().length > 0 || (m.content && m.content.trim().length > 0)) ? 'ready' : 'error'
+                  };
+                }
+                return m;
+              })
+            };
+          }
+          return c;
+        })
+      );
     } catch (err: any) {
       if (err.name === 'AbortError') {
         // Handled by stopGeneration

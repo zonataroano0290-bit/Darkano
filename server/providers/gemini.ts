@@ -208,7 +208,7 @@ export class GeminiProvider extends BaseAIProvider {
   ): AsyncGenerator<StreamEventChunk, void, unknown> {
     const startTime = Date.now();
     const client = this.getClient();
-    const targetModel = options.model === 'gemini-2.5-pro' ? 'gemini-3.8-flash' : 'gemini-3.8-flash';
+    const targetModel = options.model === 'gemini-2.5-pro' ? 'gemini-3.5-flash' : 'gemini-3.5-flash-lite';
     const contents = this.sanitizeContents(options.history, options.message, options.multimodalParts);
 
     // If research mode is active, enable Google Search Grounding
@@ -232,20 +232,8 @@ export class GeminiProvider extends BaseAIProvider {
       try {
         responseStream = await tryGenerate(targetModel);
       } catch (firstErr: any) {
-        const errMsg = String(firstErr?.message || '');
-        if (
-          errMsg.includes('503') ||
-          errMsg.includes('429') ||
-          errMsg.includes('Quota') ||
-          errMsg.includes('RESOURCE_EXHAUSTED') ||
-          errMsg.includes('UNAVAILABLE') ||
-          errMsg.includes('high demand')
-        ) {
-          console.warn(`[Gemini] Primary model ${targetModel} busy/rate-limited, falling back to resilient secondary...`);
-          responseStream = await tryGenerate('gemini-3.1-flash-lite');
-        } else {
-          throw firstErr;
-        }
+        console.warn(`[Gemini] Primary model ${targetModel} issue, falling back to gemini-3.5-flash-lite...`);
+        responseStream = await tryGenerate('gemini-3.5-flash-lite');
       }
 
       let accumulatedText = '';
@@ -363,19 +351,32 @@ export class GeminiProvider extends BaseAIProvider {
   ): Promise<NonStreamChatResponse> {
     const startTime = Date.now();
     const client = this.getClient();
-    const targetModel = options.model === 'gemini-2.5-pro' ? 'gemini-3.8-flash' : 'gemini-3.8-flash';
+    const targetModel = options.model === 'gemini-2.5-pro' ? 'gemini-3.5-flash' : 'gemini-3.5-flash-lite';
     const contents = this.sanitizeContents(options.history, options.message);
 
     try {
-      const response = await client.models.generateContent({
-        model: targetModel,
-        contents,
-        config: {
-          systemInstruction: options.resolvedSystemPrompt,
-          temperature: options.options?.temperature ?? 0.7,
-          topP: options.options?.topP ?? 0.95
-        }
-      });
+      let response;
+      try {
+        response = await client.models.generateContent({
+          model: targetModel,
+          contents,
+          config: {
+            systemInstruction: options.resolvedSystemPrompt,
+            temperature: options.options?.temperature ?? 0.7,
+            topP: options.options?.topP ?? 0.95
+          }
+        });
+      } catch {
+        response = await client.models.generateContent({
+          model: 'gemini-3.5-flash-lite',
+          contents,
+          config: {
+            systemInstruction: options.resolvedSystemPrompt,
+            temperature: options.options?.temperature ?? 0.7,
+            topP: options.options?.topP ?? 0.95
+          }
+        });
+      }
 
       const text = response.text || '';
       const latencyMs = Date.now() - startTime;

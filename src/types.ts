@@ -415,6 +415,8 @@ export interface ProjectRecord {
   status: ProjectStatus;
   createdAt: string;
   updatedAt: string;
+  currentUserRole?: ProjectMemberRole;
+  membersCount?: number;
 }
 
 export interface ProjectFileRecord {
@@ -424,6 +426,8 @@ export interface ProjectFileRecord {
   content: string;
   fileType: 'file' | 'directory';
   size: number;
+  version?: number;
+  lastModifiedBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -552,5 +556,144 @@ export interface DeploymentProviderStatus {
     cancel: boolean;
   };
 }
+
+// ==========================================
+// PHASE 11: Real Collaboration, Project Sharing & Git Integration Types
+// ==========================================
+
+export type ProjectMemberRole = 'owner' | 'editor' | 'viewer';
+export type ProjectInvitationStatus = 'pending' | 'accepted' | 'declined' | 'expired' | 'revoked';
+export type ProjectSharePermission = 'view' | 'comment' | 'edit';
+export type GitProviderType = 'github' | 'gitlab' | 'git';
+
+export interface ProjectMemberRecord {
+  id: string;
+  projectId: string;
+  userId: string;
+  role: ProjectMemberRole;
+  invitedBy: string | null;
+  status: 'active' | 'invited';
+  createdAt: string;
+  updatedAt: string;
+  userEmail?: string;
+  userDisplayName?: string;
+  userAvatarUrl?: string | null;
+}
+
+export interface ProjectInvitationRecord {
+  id: string;
+  projectId: string;
+  inviterId: string;
+  inviteeEmail: string;
+  inviteeUserId: string | null;
+  role: ProjectMemberRole;
+  token: string;
+  status: ProjectInvitationStatus;
+  expiresAt: string;
+  createdAt: string;
+  acceptedAt: string | null;
+  projectName?: string;
+  inviterEmail?: string;
+  inviterDisplayName?: string;
+}
+
+export interface ProjectShareLinkRecord {
+  id: string;
+  projectId: string;
+  token: string;
+  permission: ProjectSharePermission;
+  createdBy: string;
+  status: 'active' | 'revoked';
+  expiresAt: string | null;
+  createdAt: string;
+  useCount?: number;
+  maxUses?: number | null;
+}
+
+export interface ProjectCommentRecord {
+  id: string;
+  projectId: string;
+  filePath: string | null;
+  userId: string;
+  content: string;
+  lineStart: number | null;
+  lineEnd: number | null;
+  resolved: boolean;
+  isResolved?: boolean;
+  parentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  userDisplayName?: string;
+  userEmail?: string;
+  userAvatarUrl?: string | null;
+  authorName?: string;
+  authorEmail?: string;
+  replies?: ProjectCommentRecord[];
+}
+
+export interface ProjectActivityRecord {
+  id: string;
+  projectId: string;
+  actorUserId: string;
+  eventType: string;
+  action?: string;
+  targetType: string | null;
+  targetId: string | null;
+  metadataJson: string | null;
+  createdAt: string;
+  actorEmail?: string;
+  actorDisplayName?: string;
+  userDisplayName?: string;
+  userEmail?: string;
+}
+
+export interface GitConnectionRecord {
+  id: string;
+  projectId: string;
+  userId: string;
+  provider: GitProviderType;
+  repoUrl: string;
+  repoName: string;
+  repoOwner?: string;
+  defaultBranch: string;
+  status: 'connected' | 'disconnected' | 'error';
+  tokenEncrypted?: string | null;
+  hasToken?: boolean;
+  lastSyncAt: string | null;
+  lastCommitHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GitCommitRecord {
+  id: string;
+  projectId: string;
+  commitHash?: string;
+  sha?: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  branch: string;
+  snapshotId: string | null;
+  createdAt: string;
+}
+
+export interface GitStatusResult {
+  isConfigured?: boolean;
+  connected?: boolean;
+  connection: GitConnectionRecord | null;
+  branches: string[];
+  currentBranch?: string;
+  commits: GitCommitRecord[];
+  changedFiles: Array<{ path: string; status: 'modified' | 'added' | 'deleted' }>;
+  aheadCount?: number;
+  behindCount?: number;
+  remoteUrl?: string;
+}
+
+export type ProjectRole = ProjectMemberRole;
+export type ProjectGitStatus = GitStatusResult;
+export type ProjectGitCommitRecord = GitCommitRecord;
+
 
 

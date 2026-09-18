@@ -19,6 +19,7 @@ interface EditorPanelProps {
   onSelectFile: (file: ProjectFileRecord) => void;
   onCloseFile: (path: string, e: React.MouseEvent) => void;
   isSaving: boolean;
+  readOnly?: boolean;
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
@@ -30,7 +31,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   onSaveFile,
   onSelectFile,
   onCloseFile,
-  isSaving
+  isSaving,
+  readOnly = false
 }) => {
   // Determine CodeMirror language extension based on file extension
   const extensions = useMemo(() => {
@@ -121,19 +123,25 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
             {activeFile.path}
           </span>
-          <button
-            onClick={onSaveFile}
-            disabled={!isUnsaved || isSaving}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all ${
-              isUnsaved
-                ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-sm shadow-rose-950 cursor-pointer'
-                : 'bg-slate-800/60 text-slate-500 cursor-not-allowed'
-            }`}
-            title="Save file (Ctrl+S or Cmd+S)"
-          >
-            <Save className="w-3.5 h-3.5" />
-            <span>{isSaving ? 'Saving...' : isUnsaved ? 'Save *' : 'Saved'}</span>
-          </button>
+          {readOnly ? (
+            <span className="px-2 py-0.5 rounded text-[10px] font-semibold font-mono bg-neutral-800 text-neutral-400 border border-neutral-700">
+              READ-ONLY (VIEWER)
+            </span>
+          ) : (
+            <button
+              onClick={onSaveFile}
+              disabled={!isUnsaved || isSaving}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all ${
+                isUnsaved
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-sm shadow-rose-950 cursor-pointer'
+                  : 'bg-slate-800/60 text-slate-500 cursor-not-allowed'
+              }`}
+              title="Save file (Ctrl+S or Cmd+S)"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>{isSaving ? 'Saving...' : isUnsaved ? 'Save *' : 'Saved'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -144,7 +152,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           height="100%"
           theme={oneDark}
           extensions={extensions}
-          onChange={(val) => onContentChange(val)}
+          editable={!readOnly}
+          onChange={(val) => {
+            if (!readOnly) onContentChange(val);
+          }}
           basicSetup={{
             lineNumbers: true,
             highlightActiveLineGutter: true,

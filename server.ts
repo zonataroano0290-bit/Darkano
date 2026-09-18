@@ -1,5 +1,14 @@
 import express, { Request, Response } from 'express';
+import dns from 'node:dns';
 import path from 'path';
+
+// Prioritize IPv4 DNS resolution in container environments to prevent IPv6 timeout stalls
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch (err) {
+  console.warn('[Network Init] setDefaultResultOrder error:', err);
+}
+
 import { createServer as createViteServer } from 'vite';
 import { providerRegistry } from './server/providers/registry.js';
 import { validateAndPrepareChatRequest } from './server/contextManager.js';
@@ -23,11 +32,33 @@ import { ProjectBuildService } from './server/services/projectBuildService.js';
 import { ProjectAiService } from './server/services/projectAiService.js';
 import { DeploymentService } from './server/services/deploymentService.js';
 import { DeploymentProviderRegistry } from './server/providers/deployment/providerRegistry.js';
+import { CollaborationService, CollaborationAccessError, VersionConflictError } from './server/services/collaborationService.js';
+import { GitService } from './server/services/gitService.js';
+import { securityHeaders } from './server/middleware/securityHeaders.js';
+import { requestLogger } from './server/middleware/requestLogger.js';
+import {
+  generalApiRateLimiter,
+  authRateLimiter,
+  chatRateLimiter,
+  expensiveAiRateLimiter,
+  searchRateLimiter,
+  buildRateLimiter,
+  uploadRateLimiter
+} from './server/middleware/rateLimiter.js';
+import { SystemMaintenanceService } from './server/services/systemMaintenanceService.js';
+import { db } from './server/db/database.js';
 import fs from 'node:fs';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Security Headers & Request Correlation
+  app.use(securityHeaders);
+  app.use(requestLogger);
+
+  // Global API Rate Limiter
+  app.use('/api', generalApiRateLimiter);
 
   // JSON Body Parser with rawBody preservation for webhooks
   app.use(express.json({
@@ -67,7 +98,7 @@ async function startServer() {
   // ==========================================
   // 2. Authentication Endpoints
   // ==========================================
-  app.post('/api/auth/register', (req: Request, res: Response): void => {
+  app.post('/api/auth/register', authRateLimiter, (req: Request, res: Response): void => {
     try {
       const { email, password, displayName } = req.body || {};
       const result = AuthService.register({ email, password, displayName });
@@ -77,7 +108,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/login', (req: Request, res: Response): void => {
+  app.post('/api/auth/login', authRateLimiter, (req: Request, res: Response): void => {
     try {
       const { email, password } = req.body || {};
       const result = AuthService.login({ email, password });
@@ -104,7 +135,7 @@ async function startServer() {
     res.status(200).json({ user: profile });
   });
 
-  app.post('/api/auth/forgot-password', (req: Request, res: Response): void => {
+  app.post('/api/auth/forgot-password', authRateLimiter, (req: Request, res: Response): void => {
     try {
       const { email } = req.body || {};
       const result = AuthService.requestPasswordReset(email || '');
@@ -114,7 +145,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/reset-password', (req: Request, res: Response): void => {
+  app.post('/api/auth/reset-password', authRateLimiter, (req: Request, res: Response): void => {
     try {
       const { token, newPassword } = req.body || {};
       const result = AuthService.resetPassword(token, newPassword);
@@ -220,7 +251,7 @@ async function startServer() {
   // ==========================================
   // 5. Streaming Chat Endpoint (Authenticated)
   // ==========================================
-  app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/chat/stream', requireAuth, chatRateLimiter, async (req: Request, res: Response): Promise<void> => {
     const validation = validateAndPrepareChatRequest(req.body);
 
     if (!validation.valid || !validation.sanitizedPayload) {
@@ -300,11 +331,14 @@ async function startServer() {
     });
 
     // Configure Server-Sent Events headers
+    res.status(200);
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders?.();
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
 
     const abortController = new AbortController();
     let accumulatedText = '';
@@ -643,7 +677,7 @@ async function startServer() {
   });
 
   // 6. Non-streaming chat endpoint (Fallback)
-  app.post('/api/chat', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/chat', requireAuth, chatRateLimiter, async (req: Request, res: Response): Promise<void> => {
     const validation = validateAndPrepareChatRequest(req.body);
 
     if (!validation.valid || !validation.sanitizedPayload) {
@@ -717,6 +751,7 @@ async function startServer() {
   app.post(
     '/api/files/upload',
     requireAuth,
+    uploadRateLimiter,
     uploadMiddleware.array('files', 10) as any,
     async (req: Request, res: Response): Promise<void> => {
       try {
@@ -850,7 +885,7 @@ async function startServer() {
   // ==========================================
   // 8. Phase 5: Real Web Search & Tool Execution
   // ==========================================
-  app.post('/api/search', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/search', requireAuth, searchRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const { query, limit } = req.body || {};
       if (!query || typeof query !== 'string' || !query.trim()) {
@@ -878,7 +913,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/fetch-page', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/fetch-page', requireAuth, searchRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const { url } = req.body || {};
       if (!url || typeof url !== 'string' || !url.trim()) {
@@ -1179,6 +1214,59 @@ async function startServer() {
     }
   });
 
+  // System Maintenance & Data Retention Endpoints
+  app.post('/api/admin/maintenance/cleanup', requireAdmin, (req: Request, res: Response): void => {
+    try {
+      const report = SystemMaintenanceService.runAllMaintenance();
+      AdminService.logAction({
+        adminId: req.user!.userId,
+        adminEmail: req.user!.email,
+        action: 'system_maintenance_cleanup',
+        targetType: 'system',
+        targetId: 'db',
+        details: { sessionsCleaned: report.sessionsCleaned, orphanedSandboxesCleaned: report.orphanedSandboxesCleaned }
+      });
+      res.status(200).json({ success: true, report });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Maintenance cleanup failed', code: 'MAINTENANCE_ERROR' });
+    }
+  });
+
+  app.post('/api/admin/maintenance/backup', requireAdmin, (req: Request, res: Response): void => {
+    try {
+      const backup = SystemMaintenanceService.createDatabaseBackup();
+      AdminService.logAction({
+        adminId: req.user!.userId,
+        adminEmail: req.user!.email,
+        action: 'database_backup_created',
+        targetType: 'system',
+        targetId: backup.backupFileName,
+        details: { sizeBytes: backup.sizeBytes, retained: backup.retainedBackupsCount }
+      });
+      res.status(200).json({ success: true, backup });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Database backup failed', code: 'BACKUP_ERROR' });
+    }
+  });
+
+  app.get('/api/admin/maintenance/integrity', requireAdmin, (req: Request, res: Response): void => {
+    try {
+      const integrity = SystemMaintenanceService.verifyDatabaseIntegrity();
+      res.status(200).json(integrity);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Integrity check failed', code: 'INTEGRITY_ERROR' });
+    }
+  });
+
+  app.get('/api/admin/maintenance/ledger-audit', requireAdmin, (req: Request, res: Response): void => {
+    try {
+      const ledgerAudit = SystemMaintenanceService.auditCreditLedger();
+      res.status(200).json(ledgerAudit);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Credit ledger audit failed', code: 'LEDGER_AUDIT_ERROR' });
+    }
+  });
+
   // ==========================================
   // 10. Phase 7: Real AI Agent / Multi-Step Engine
   // ==========================================
@@ -1406,7 +1494,7 @@ async function startServer() {
   });
 
   // Upload image or audio file directly to user media vault
-  app.post('/api/multimodal/upload', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/multimodal/upload', requireAuth, uploadRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user!.userId;
       const { data, mimeType, type, conversationId } = req.body || {};
@@ -1435,7 +1523,7 @@ async function startServer() {
   });
 
   // Generate image using real image generation model
-  app.post('/api/multimodal/generate-image', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/multimodal/generate-image', requireAuth, expensiveAiRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user!.userId;
       const { prompt, aspectRatio, conversationId } = req.body || {};
@@ -1459,7 +1547,7 @@ async function startServer() {
   });
 
   // Edit an existing image with text instructions
-  app.post('/api/multimodal/edit-image', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/multimodal/edit-image', requireAuth, expensiveAiRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user!.userId;
       const { sourceMediaId, prompt, conversationId } = req.body || {};
@@ -1483,7 +1571,7 @@ async function startServer() {
   });
 
   // Transcribe audio (STT) from user recording or file
-  app.post('/api/multimodal/transcribe', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/multimodal/transcribe', requireAuth, expensiveAiRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user!.userId;
       const { audioBase64, mimeType, prompt, conversationId } = req.body || {};
@@ -1511,7 +1599,7 @@ async function startServer() {
   });
 
   // Synthesize text-to-speech (TTS)
-  app.post('/api/multimodal/tts', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/multimodal/tts', requireAuth, expensiveAiRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user!.userId;
       const { text, voiceName, conversationId, messageId } = req.body || {};
@@ -1703,10 +1791,25 @@ async function startServer() {
 
   app.put('/api/projects/:projectId/files', requireAuth, (req: Request, res: Response): void => {
     try {
-      const { path: rawPath, content } = req.body || {};
-      const file = ProjectService.updateFile(req.user!.userId, req.params.projectId, rawPath, content || '');
+      const { path: rawPath, content, expectedVersion, force } = req.body || {};
+      const file = ProjectService.updateFile(
+        req.user!.userId,
+        req.params.projectId,
+        rawPath,
+        content || '',
+        expectedVersion !== undefined ? Number(expectedVersion) : undefined,
+        Boolean(force)
+      );
       res.status(200).json({ file });
     } catch (err: any) {
+      if (err instanceof VersionConflictError || err.name === 'VersionConflictError') {
+        res.status(409).json({
+          error: 'File version conflict. Another collaborator modified this file.',
+          code: 'VERSION_CONFLICT',
+          currentFile: err.currentFile
+        });
+        return;
+      }
       res.status(400).json({ error: err?.message || 'Failed to update file' });
     }
   });
@@ -1800,7 +1903,7 @@ async function startServer() {
   });
 
   // Builds & Quality Checks
-  app.post('/api/projects/:projectId/builds', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/projects/:projectId/builds', requireAuth, buildRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const command = req.body?.command || 'npm run build';
       const build = await ProjectBuildService.runBuild(req.user!.userId, req.params.projectId, command);
@@ -2066,7 +2169,7 @@ async function startServer() {
   });
 
   // 3. Create real deployment (Production / Preview)
-  app.post('/api/projects/:projectId/deployments', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  app.post('/api/projects/:projectId/deployments', requireAuth, buildRateLimiter, async (req: Request, res: Response): Promise<void> => {
     try {
       const { snapshotId, environment, providerName } = req.body || {};
       const deployment = await DeploymentService.createDeployment({
@@ -2240,6 +2343,321 @@ async function startServer() {
   });
 
   // ==========================================
+  // PHASE 11: Real Collaboration, Sharing & Git API
+  // ==========================================
+
+  // --- Members ---
+  app.get('/api/projects/:projectId/members', requireAuth, (req: Request, res: Response): void => {
+    try {
+      CollaborationService.verifyAccess(req.user!.userId, req.params.projectId, 'viewer');
+      const members = CollaborationService.listMembers(req.params.projectId);
+      res.status(200).json({ members });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to list members' });
+    }
+  });
+
+  app.patch('/api/projects/:projectId/members/:memberUserId/role', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { role } = req.body || {};
+      if (!role) {
+        res.status(400).json({ error: 'Role is required' });
+        return;
+      }
+      CollaborationService.updateMemberRole(req.user!.userId, req.params.projectId, req.params.memberUserId, role);
+      res.status(200).json({ success: true, message: `Member role updated to ${role}.` });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to update member role' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId/members/:memberUserId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      CollaborationService.removeMember(req.user!.userId, req.params.projectId, req.params.memberUserId);
+      res.status(200).json({ success: true, message: 'Member removed from project.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to remove member' });
+    }
+  });
+
+  // --- Invitations ---
+  app.get('/api/projects/:projectId/invitations', requireAuth, (req: Request, res: Response): void => {
+    try {
+      CollaborationService.verifyAccess(req.user!.userId, req.params.projectId, 'owner');
+      const invitations = CollaborationService.listProjectInvitations(req.params.projectId);
+      res.status(200).json({ invitations });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to list invitations' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/invitations', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { inviteeEmail, role = 'editor' } = req.body || {};
+      if (!inviteeEmail) {
+        res.status(400).json({ error: 'inviteeEmail is required' });
+        return;
+      }
+      const invitation = CollaborationService.createInvitation({
+        actorId: req.user!.userId,
+        projectId: req.params.projectId,
+        inviteeEmail,
+        role
+      });
+      res.status(201).json({ invitation });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to send invitation' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId/invitations/:invitationId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      CollaborationService.revokeInvitation(req.user!.userId, req.params.projectId, req.params.invitationId);
+      res.status(200).json({ success: true, message: 'Invitation revoked.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to revoke invitation' });
+    }
+  });
+
+  // Current user's incoming invitations
+  app.get('/api/user/invitations', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const invitations = CollaborationService.listUserInvitations(req.user!.email, req.user!.userId);
+      res.status(200).json({ invitations });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list user invitations' });
+    }
+  });
+
+  app.post('/api/invitations/accept', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { token } = req.body || {};
+      if (!token) {
+        res.status(400).json({ error: 'Invitation token is required' });
+        return;
+      }
+      const result = CollaborationService.acceptInvitation(req.user!.userId, req.user!.email, token);
+      res.status(200).json({ success: true, ...result, message: 'Invitation accepted successfully.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to accept invitation' });
+    }
+  });
+
+  app.post('/api/invitations/decline', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { token } = req.body || {};
+      if (!token) {
+        res.status(400).json({ error: 'Invitation token is required' });
+        return;
+      }
+      CollaborationService.declineInvitation(req.user!.userId, req.user!.email, token);
+      res.status(200).json({ success: true, message: 'Invitation declined.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to decline invitation' });
+    }
+  });
+
+  // --- Share Links ---
+  app.get('/api/projects/:projectId/share-links', requireAuth, (req: Request, res: Response): void => {
+    try {
+      CollaborationService.verifyAccess(req.user!.userId, req.params.projectId, 'owner');
+      const shareLinks = CollaborationService.listShareLinks(req.params.projectId);
+      res.status(200).json({ shareLinks });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to list share links' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/share-links', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { permission = 'view', expiresInDays = 30 } = req.body || {};
+      const link = CollaborationService.createShareLink({
+        actorId: req.user!.userId,
+        projectId: req.params.projectId,
+        permission,
+        expiresInDays: Number(expiresInDays)
+      });
+      res.status(201).json({ link });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to generate share link' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId/share-links/:linkId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      CollaborationService.revokeShareLink(req.user!.userId, req.params.projectId, req.params.linkId);
+      res.status(200).json({ success: true, message: 'Share link revoked.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to revoke share link' });
+    }
+  });
+
+  app.post('/api/share-links/join', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { token } = req.body || {};
+      if (!token) {
+        res.status(400).json({ error: 'Share link token is required' });
+        return;
+      }
+      const result = CollaborationService.joinViaShareLink(req.user!.userId, token);
+      res.status(200).json({ success: true, ...result, message: 'Joined project successfully via share link.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to join project via share link' });
+    }
+  });
+
+  // --- Comments ---
+  app.get('/api/projects/:projectId/comments', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const filePath = req.query.filePath as string | undefined;
+      const comments = CollaborationService.listComments(req.params.projectId, filePath);
+      res.status(200).json({ comments });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to list comments' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/comments', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { filePath, content, lineStart, lineEnd, parentId } = req.body || {};
+      const comment = CollaborationService.addComment({
+        userId: req.user!.userId,
+        projectId: req.params.projectId,
+        filePath,
+        content,
+        lineStart: lineStart !== undefined ? Number(lineStart) : null,
+        lineEnd: lineEnd !== undefined ? Number(lineEnd) : null,
+        parentId
+      });
+      res.status(201).json({ comment });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to post comment' });
+    }
+  });
+
+  app.patch('/api/projects/:projectId/comments/:commentId/resolve', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { resolved = true } = req.body || {};
+      CollaborationService.toggleCommentResolved(req.user!.userId, req.params.projectId, req.params.commentId, Boolean(resolved));
+      res.status(200).json({ success: true, resolved: Boolean(resolved) });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to update comment status' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId/comments/:commentId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      CollaborationService.deleteComment(req.user!.userId, req.params.projectId, req.params.commentId);
+      res.status(200).json({ success: true, message: 'Comment deleted.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to delete comment' });
+    }
+  });
+
+  // --- Activity Stream / Audit Log ---
+  app.get('/api/projects/:projectId/activity', requireAuth, (req: Request, res: Response): void => {
+    try {
+      CollaborationService.verifyAccess(req.user!.userId, req.params.projectId, 'viewer');
+      const limit = parseInt(req.query.limit as string) || 50;
+      const activity = CollaborationService.listActivity(req.params.projectId, limit);
+      res.status(200).json({ activity });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to retrieve project activity' });
+    }
+  });
+
+  // --- Real Git Integration ---
+  app.get('/api/projects/:projectId/git/status', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const status = await GitService.getStatus(req.user!.userId, req.params.projectId);
+      res.status(200).json(status);
+    } catch (err: any) {
+      res.status(err.statusCode || 500).json({ error: err.message || 'Failed to fetch Git status' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/git/connect', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { repoUrl, token, defaultBranch } = req.body || {};
+      if (!repoUrl) {
+        res.status(400).json({ error: 'Repository URL or slug (owner/repo) is required' });
+        return;
+      }
+      const connection = await GitService.connectRepository({
+        userId: req.user!.userId,
+        projectId: req.params.projectId,
+        repoUrl,
+        token,
+        defaultBranch
+      });
+      res.status(200).json({ connection, message: 'Repository connected successfully.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to connect repository' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/git/disconnect', requireAuth, (req: Request, res: Response): void => {
+    try {
+      GitService.disconnectRepository(req.user!.userId, req.params.projectId);
+      res.status(200).json({ success: true, message: 'Git repository disconnected.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to disconnect repository' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/git/commit', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { message, branch } = req.body || {};
+      if (!message || !message.trim()) {
+        res.status(400).json({ error: 'Commit message is required' });
+        return;
+      }
+      const commit = await GitService.createCommit({
+        userId: req.user!.userId,
+        projectId: req.params.projectId,
+        message,
+        branch
+      });
+      res.status(201).json({ commit, message: 'Commit published to remote repository successfully.' });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to create Git commit' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/git/pull', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { branch } = req.body || {};
+      const result = await GitService.pullRepository(req.user!.userId, req.params.projectId, branch);
+      res.status(200).json({
+        success: true,
+        ...result,
+        message: `Pulled ${result.filesUpdated} files from branch.`
+      });
+    } catch (err: any) {
+      res.status(err.statusCode || 400).json({ error: err.message || 'Failed to pull repository' });
+    }
+  });
+
+  // ==========================================
+  // Centralized Error Handling Middleware
+  // ==========================================
+  app.use((err: any, req: Request, res: Response, next: any) => {
+    const requestId = (req as any).id || 'unknown';
+    console.error(`[Unhandled Error] [${requestId}] ${req.method} ${req.url}:`, err?.message || err);
+
+    if (res.headersSent) {
+      return next(err);
+    }
+
+    const statusCode = err.status || err.statusCode || 500;
+    res.status(statusCode).json({
+      error: statusCode === 500 ? 'Internal server error. Please try again later.' : (err.message || 'An unexpected error occurred'),
+      code: err.code || 'SERVER_ERROR',
+      requestId
+    });
+  });
+
+  // ==========================================
   // Vite Integration & Static Assets
   // ==========================================
   if (process.env.NODE_ENV !== 'production') {
@@ -2256,10 +2674,61 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Darkano AI Server] Operational on http://0.0.0.0:${PORT}`);
+
+    // Schedule automated routine maintenance every 30 minutes
+    const maintenanceInterval = setInterval(() => {
+      try {
+        const cleanedSessions = SystemMaintenanceService.cleanupExpiredSessions();
+        const cleanedResets = SystemMaintenanceService.cleanupExpiredPasswordResets();
+        const expiredInvitations = SystemMaintenanceService.cleanupExpiredInvitations();
+        const expiredShareLinks = SystemMaintenanceService.cleanupExpiredShareLinks();
+        if (cleanedSessions > 0 || cleanedResets > 0 || expiredInvitations > 0 || expiredShareLinks > 0) {
+          console.log(`[Maintenance Routine] Expired items purged: sessions=${cleanedSessions}, resets=${cleanedResets}, invites=${expiredInvitations}, shareLinks=${expiredShareLinks}`);
+        }
+      } catch (err: any) {
+        console.warn('[Maintenance Routine] Error executing scheduled cleanup:', err?.message);
+      }
+    }, 30 * 60 * 1000);
+
+    if (maintenanceInterval.unref) {
+      maintenanceInterval.unref();
+    }
   });
+
+  // Process Graceful Shutdown Handlers
+  const gracefulShutdown = (signal: string) => {
+    console.log(`[Darkano AI Server] Received ${signal}. Initiating graceful shutdown...`);
+    server.close(() => {
+      console.log('[Darkano AI Server] HTTP server closed cleanly.');
+      try {
+        db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      } catch (err) {
+        console.warn('[Darkano AI Server] Checkpoint warning:', err);
+      }
+      process.exit(0);
+    });
+
+    // Forced termination fallback if connections remain open
+    setTimeout(() => {
+      console.error('[Darkano AI Server] Forced shutdown after timeout.');
+      process.exit(1);
+    }, 10000).unref();
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
+
+// Global process error safety guards
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process] Unhandled Promise Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception:', err);
+});
 
 startServer().catch(err => {
   console.error('[Darkano AI Server] Fatal startup error:', err);

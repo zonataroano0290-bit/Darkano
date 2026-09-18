@@ -517,7 +517,7 @@ Return ONLY the runnable TypeScript test file code inside triple backticks.`;
     ];
 
     const client = this.getClient();
-    const model = 'gemini-2.5-flash';
+    const model = 'gemini-3.5-flash-lite';
 
     const fileSummary = files.slice(0, 15).map(f => `- ${f.path} (${f.size} bytes)`).join('\n');
 
@@ -572,7 +572,7 @@ Format response strictly as JSON:
     ProjectService.verifyOwnership(userId, projectId);
 
     const client = this.getClient();
-    const model = 'gemini-2.5-flash';
+    const model = 'gemini-3.5-flash-lite';
 
     const prompt = `Analyze this deployment failure and explain the root cause and how to fix it:
 Deployment ID: ${deploymentId}

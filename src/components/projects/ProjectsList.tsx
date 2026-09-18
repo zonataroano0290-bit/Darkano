@@ -12,12 +12,16 @@ import {
   Search,
   RefreshCw,
   Box,
-  AlertCircle
+  AlertCircle,
+  Users,
+  Shield
 } from 'lucide-react';
 import { ProjectRecord, ProjectFramework, ProjectLanguage } from '../../types';
+import { InvitationsBanner } from './InvitationsBanner';
 
 interface ProjectsListProps {
   projects: ProjectRecord[];
+  token?: string | null;
   onOpenProject: (projectId: string) => void;
   onCreateProject: (data: {
     name: string;
@@ -34,6 +38,7 @@ interface ProjectsListProps {
 
 export const ProjectsList: React.FC<ProjectsListProps> = ({
   projects,
+  token,
   onOpenProject,
   onCreateProject,
   onGenerateAiProject,
@@ -173,6 +178,9 @@ export const ProjectsList: React.FC<ProjectsListProps> = ({
           </div>
         </div>
 
+        {/* Pending Project Invitations Banner */}
+        <InvitationsBanner token={token || null} onInvitationHandled={onRefresh} />
+
         {/* Search Bar */}
         <div className="flex items-center justify-between gap-4">
           <div className="relative flex-1 max-w-md">
@@ -244,6 +252,31 @@ export const ProjectsList: React.FC<ProjectsListProps> = ({
                     </span>
                     <span>·</span>
                     <span className="uppercase text-slate-400">{project.language}</span>
+                    {project.currentUserRole && (
+                      <>
+                        <span>·</span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                            project.currentUserRole === 'owner'
+                              ? 'bg-amber-500/10 border-amber-500/20 text-amber-300'
+                              : project.currentUserRole === 'editor'
+                              ? 'bg-blue-500/10 border-blue-500/20 text-blue-300'
+                              : 'bg-neutral-800 border-neutral-700 text-neutral-300'
+                          }`}
+                        >
+                          {project.currentUserRole.toUpperCase()}
+                        </span>
+                      </>
+                    )}
+                    {(project.membersCount || 1) > 1 && (
+                      <>
+                        <span>·</span>
+                        <span className="flex items-center gap-1 text-purple-400">
+                          <Users className="w-3 h-3" />
+                          <span>{project.membersCount}</span>
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 
