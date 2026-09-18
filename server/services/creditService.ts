@@ -11,7 +11,8 @@ export type CreditTransactionType =
   | 'video_generation_usage'
   | 'refund'
   | 'manual_admin_adjustment'
-  | 'signup_bonus';
+  | 'signup_bonus'
+  | 'deployment_usage';
 
 export interface CreditTransaction {
   id: string;

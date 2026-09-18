@@ -394,3 +394,163 @@ export interface WorkspaceSettings {
 export type ActiveModal = 'models' | 'settings' | 'account' | 'share' | 'file-preview' | 'credits' | 'plans' | 'admin' | null;
 export type SettingsTab = 'account' | 'appearance' | 'chat' | 'models' | 'notifications' | 'privacy' | 'usage';
 export type ViewSection = 'workspace' | 'files';
+
+// ==========================================
+// PHASE 9: Real AI Coding Workspace + Project Builder Types
+// ==========================================
+
+export type ProjectFramework = 'react-vite' | 'vanilla-html' | 'nodejs';
+export type ProjectLanguage = 'typescript' | 'javascript' | 'html';
+export type ProjectStatus = 'active' | 'building' | 'archived';
+export type ProjectBuildStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+export type PatchStatus = 'pending' | 'applied' | 'rejected';
+
+export interface ProjectRecord {
+  id: string;
+  userId: string;
+  name: string;
+  description: string | null;
+  framework: ProjectFramework;
+  language: ProjectLanguage;
+  status: ProjectStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectFileRecord {
+  id: string;
+  projectId: string;
+  path: string;
+  content: string;
+  fileType: 'file' | 'directory';
+  size: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectSnapshotRecord {
+  id: string;
+  projectId: string;
+  createdBy: string;
+  description: string;
+  filesJson: string;
+  createdAt: string;
+}
+
+export interface ProjectBuildRecord {
+  id: string;
+  projectId: string;
+  userId: string;
+  status: ProjectBuildStatus;
+  command: string;
+  output: string;
+  errors: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number;
+}
+
+export interface ProjectPatchRecord {
+  id: string;
+  projectId: string;
+  userId: string;
+  path: string;
+  originalContent: string | null;
+  proposedContent: string;
+  diffSummary: string;
+  status: PatchStatus;
+  createdAt: string;
+  appliedAt: string | null;
+}
+
+export interface ProjectEnvVarRecord {
+  id: string;
+  projectId: string;
+  key: string;
+  isConfigured: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectQualityChecksResult {
+  syntax: { status: 'passed' | 'failed' | 'not_configured'; errors?: string[] };
+  typeCheck: { status: 'passed' | 'failed' | 'not_configured'; errors?: string[] };
+  lint: { status: 'passed' | 'failed' | 'not_configured'; warnings?: string[]; errors?: string[] };
+  tests: { status: 'passed' | 'failed' | 'not_configured'; total: number; passed: number; failed: number; results?: Array<{ name: string; status: 'passed' | 'failed'; error?: string }> };
+  productionBuild: { status: 'passed' | 'failed' | 'not_configured'; output?: string; errors?: string };
+}
+
+// ==========================================
+// PHASE 10: Real Deployment & Cloud Workspace Types
+// ==========================================
+
+export type DeploymentEnvironment = 'production' | 'preview' | 'development';
+export type DeploymentProviderName = 'vercel' | 'netlify' | 'cloudflare' | 'none';
+export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'running' | 'failed' | 'cancelled' | 'stopped';
+export type DeploymentHealthStatus = 'healthy' | 'unhealthy' | 'unknown';
+
+export interface DeploymentRecord {
+  id: string;
+  projectId: string;
+  userId: string;
+  snapshotId: string | null;
+  environment: DeploymentEnvironment;
+  provider: DeploymentProviderName;
+  status: DeploymentStatus;
+  deploymentUrl: string | null;
+  buildId: string | null;
+  logsReference: string | null;
+  errorMessage: string | null;
+  healthStatus: DeploymentHealthStatus;
+  creditsDeducted: number;
+  durationMs: number;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  stoppedAt: string | null;
+}
+
+export interface DeploymentLogRecord {
+  id: string;
+  deploymentId: string;
+  level: 'info' | 'warn' | 'error' | 'system';
+  message: string;
+  timestamp: string;
+}
+
+export interface DeploymentEnvVarRecord {
+  id: string;
+  projectId: string;
+  environment: DeploymentEnvironment;
+  key: string;
+  isConfigured: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeploymentDomainRecord {
+  id: string;
+  projectId: string;
+  domain: string;
+  environment: DeploymentEnvironment;
+  verified: boolean;
+  sslStatus: 'active' | 'pending' | 'unknown' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeploymentProviderStatus {
+  provider: DeploymentProviderName;
+  configured: boolean;
+  name: string;
+  reason?: string;
+  supportedEnvironments: DeploymentEnvironment[];
+  supportedFeatures: {
+    customDomains: boolean;
+    healthChecks: boolean;
+    rollback: boolean;
+    cancel: boolean;
+  };
+}
+
+

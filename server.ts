@@ -18,6 +18,11 @@ import { AgentTaskService } from './server/db/agentTaskService.js';
 import { AgentEngine } from './server/services/agentEngine.js';
 import { MediaService } from './server/services/mediaService.js';
 import { MultimodalService } from './server/services/multimodalService.js';
+import { ProjectService } from './server/db/projectService.js';
+import { ProjectBuildService } from './server/services/projectBuildService.js';
+import { ProjectAiService } from './server/services/projectAiService.js';
+import { DeploymentService } from './server/services/deploymentService.js';
+import { DeploymentProviderRegistry } from './server/providers/deployment/providerRegistry.js';
 import fs from 'node:fs';
 
 async function startServer() {
@@ -1601,6 +1606,636 @@ async function startServer() {
       res.status(200).json({ success: true, message: 'Media removed successfully.' });
     } catch (err: any) {
       res.status(400).json({ error: err?.message || 'Failed to delete media', code: 'DELETE_FAILED' });
+    }
+  });
+
+  // ==========================================
+  // PHASE 9: Real AI Coding Workspace + Project Builder API
+  // ==========================================
+
+  // Projects CRUD
+  app.get('/api/projects', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const projects = ProjectService.listProjects(req.user!.userId);
+      res.status(200).json({ projects });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to list projects' });
+    }
+  });
+
+  app.post('/api/projects', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { name, description, framework, language } = req.body || {};
+      const result = ProjectService.createProject({
+        userId: req.user!.userId,
+        name: name || 'New Project',
+        description,
+        framework,
+        language
+      });
+      res.status(201).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to create project' });
+    }
+  });
+
+  app.get('/api/projects/:projectId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const project = ProjectService.getProject(req.user!.userId, req.params.projectId);
+      res.status(200).json({ project });
+    } catch (err: any) {
+      res.status(404).json({ error: err?.message || 'Project not found' });
+    }
+  });
+
+  app.patch('/api/projects/:projectId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { name, description, status } = req.body || {};
+      const project = ProjectService.updateProject(req.user!.userId, req.params.projectId, { name, description, status });
+      res.status(200).json({ project });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to update project' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      ProjectService.deleteProject(req.user!.userId, req.params.projectId);
+      res.status(200).json({ success: true, message: 'Project removed successfully.' });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to delete project' });
+    }
+  });
+
+  // Project Files
+  app.get('/api/projects/:projectId/files', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const files = ProjectService.listFiles(req.user!.userId, req.params.projectId);
+      res.status(200).json({ files });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to retrieve project files' });
+    }
+  });
+
+  app.get('/api/projects/:projectId/files/content', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const filePath = req.query.path as string;
+      if (!filePath) {
+        res.status(400).json({ error: 'Query parameter "path" is required' });
+        return;
+      }
+      const file = ProjectService.getFile(req.user!.userId, req.params.projectId, filePath);
+      res.status(200).json({ file });
+    } catch (err: any) {
+      res.status(404).json({ error: err?.message || 'File not found' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/files', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { path: rawPath, content, fileType } = req.body || {};
+      const file = ProjectService.createFile(req.user!.userId, req.params.projectId, rawPath, content || '', fileType || 'file');
+      res.status(201).json({ file });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to create file' });
+    }
+  });
+
+  app.put('/api/projects/:projectId/files', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { path: rawPath, content } = req.body || {};
+      const file = ProjectService.updateFile(req.user!.userId, req.params.projectId, rawPath, content || '');
+      res.status(200).json({ file });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to update file' });
+    }
+  });
+
+  app.patch('/api/projects/:projectId/files/rename', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { oldPath, newPath } = req.body || {};
+      const file = ProjectService.renameFile(req.user!.userId, req.params.projectId, oldPath, newPath);
+      res.status(200).json({ file });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to rename file' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId/files', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const filePath = req.query.path as string;
+      if (!filePath) {
+        res.status(400).json({ error: 'Query parameter "path" is required' });
+        return;
+      }
+      ProjectService.deleteFile(req.user!.userId, req.params.projectId, filePath);
+      res.status(200).json({ success: true, message: 'File deleted successfully.' });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to delete file' });
+    }
+  });
+
+  // Folders
+  app.post('/api/projects/:projectId/folders', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { path: rawPath } = req.body || {};
+      const folder = ProjectService.createFolder(req.user!.userId, req.params.projectId, rawPath);
+      res.status(201).json({ folder });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to create folder' });
+    }
+  });
+
+  app.patch('/api/projects/:projectId/folders/rename', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { oldFolder, newFolder } = req.body || {};
+      const result = ProjectService.renameFolder(req.user!.userId, req.params.projectId, oldFolder, newFolder);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to rename folder' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId/folders', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const folderPath = req.query.path as string;
+      if (!folderPath) {
+        res.status(400).json({ error: 'Query parameter "path" is required' });
+        return;
+      }
+      const result = ProjectService.deleteFolder(req.user!.userId, req.params.projectId, folderPath);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to delete folder' });
+    }
+  });
+
+  // Snapshots
+  app.get('/api/projects/:projectId/snapshots', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const snapshots = ProjectService.listSnapshots(req.user!.userId, req.params.projectId);
+      res.status(200).json({ snapshots });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to list snapshots' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/snapshots', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { description } = req.body || {};
+      const snapshot = ProjectService.createSnapshot(req.user!.userId, req.params.projectId, description || 'Manual snapshot');
+      res.status(201).json({ snapshot });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to create snapshot' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/snapshots/:snapshotId/rollback', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const result = ProjectService.rollbackSnapshot(req.user!.userId, req.params.projectId, req.params.snapshotId);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to rollback snapshot' });
+    }
+  });
+
+  // Builds & Quality Checks
+  app.post('/api/projects/:projectId/builds', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const command = req.body?.command || 'npm run build';
+      const build = await ProjectBuildService.runBuild(req.user!.userId, req.params.projectId, command);
+      res.status(200).json({ build });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Build execution failed' });
+    }
+  });
+
+  app.get('/api/projects/:projectId/builds', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const builds = ProjectService.listBuilds(req.user!.userId, req.params.projectId);
+      res.status(200).json({ builds });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to list builds' });
+    }
+  });
+
+  app.get('/api/projects/:projectId/checks', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const checks = await ProjectBuildService.runQualityChecks(req.user!.userId, req.params.projectId);
+      res.status(200).json({ checks });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to run quality checks' });
+    }
+  });
+
+  // Safe Patches
+  app.get('/api/projects/:projectId/patches', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const patches = ProjectService.listPendingPatches(req.user!.userId, req.params.projectId);
+      res.status(200).json({ patches });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to list patches' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/patches/:patchId/apply', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const result = ProjectService.applyPatch(req.user!.userId, req.params.projectId, req.params.patchId);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to apply patch' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/patches/:patchId/reject', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const success = ProjectService.rejectPatch(req.user!.userId, req.params.projectId, req.params.patchId);
+      res.status(200).json({ success });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to reject patch' });
+    }
+  });
+
+  // AI Coding Operations
+  app.post('/api/projects/:projectId/ai/edit', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { filePath, selectedCode, instruction, actionType, mediaBase64, mediaMimeType } = req.body || {};
+      if (!filePath || !instruction) {
+        res.status(400).json({ error: 'filePath and instruction are required' });
+        return;
+      }
+      const result = await ProjectAiService.editCodeWithAi({
+        userId: req.user!.userId,
+        projectId: req.params.projectId,
+        filePath,
+        selectedCode,
+        instruction,
+        actionType: actionType || 'fix',
+        mediaBase64,
+        mediaMimeType
+      });
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'AI code editing failed' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/ai/fix-error', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await ProjectAiService.fixBuildErrorWithAi(req.user!.userId, req.params.projectId);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'AI build error fix failed' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/ai/generate', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { prompt, framework, language, mediaBase64, mediaMimeType } = req.body || {};
+      if (!prompt) {
+        res.status(400).json({ error: 'prompt is required' });
+        return;
+      }
+      const result = await ProjectAiService.generateProjectWithAi({
+        userId: req.user!.userId,
+        prompt,
+        framework,
+        language,
+        mediaBase64,
+        mediaMimeType
+      });
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'AI project generation failed' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/ai/generate-tests', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { filePath } = req.body || {};
+      if (!filePath) {
+        res.status(400).json({ error: 'filePath is required' });
+        return;
+      }
+      const result = await ProjectAiService.generateTestsForFile(req.user!.userId, req.params.projectId, filePath);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'AI test generation failed' });
+    }
+  });
+
+  // Environment Variables (Masked Secret Storage)
+  app.get('/api/projects/:projectId/env', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const envVars = ProjectService.listEnvVars(req.user!.userId, req.params.projectId);
+      res.status(200).json({ envVars });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to list env vars' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/env', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { key, value } = req.body || {};
+      if (!key || typeof value !== 'string') {
+        res.status(400).json({ error: 'key and value are required' });
+        return;
+      }
+      ProjectService.setEnvVar(req.user!.userId, req.params.projectId, key, value);
+      res.status(200).json({ success: true, message: `Environment variable "${key}" saved.` });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to set env var' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId/env/:key', requireAuth, (req: Request, res: Response): void => {
+    try {
+      ProjectService.deleteEnvVar(req.user!.userId, req.params.projectId, req.params.key);
+      res.status(200).json({ success: true, message: 'Environment variable removed.' });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to delete env var' });
+    }
+  });
+
+  // Real Project Search
+  app.get('/api/projects/:projectId/search', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const query = (req.query.q as string) || '';
+      const results = ProjectService.searchProject(req.user!.userId, req.params.projectId, query);
+      res.status(200).json({ results });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Search failed' });
+    }
+  });
+
+  // Real Project Zip Export
+  app.get('/api/projects/:projectId/export', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const project = ProjectService.getProject(req.user!.userId, req.params.projectId);
+      const safeFilename = `${project.name.toLowerCase().replace(/[^a-z0-9-]/g, '_') || 'project'}.zip`;
+
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+
+      await ProjectBuildService.exportProjectZip(req.user!.userId, req.params.projectId, res);
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: err?.message || 'Export failed' });
+      }
+    }
+  });
+
+  // Git status endpoint
+  app.get('/api/projects/:projectId/git/status', requireAuth, (req: Request, res: Response): void => {
+    res.status(200).json({
+      configured: false,
+      message: 'Git integration not configured.'
+    });
+  });
+
+  // Real Live Preview Route
+  app.get('/api/projects/:projectId/preview*', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const fullPath = req.path;
+      const previewPrefix = `/api/projects/${req.params.projectId}/preview`;
+      let subPath = fullPath.slice(previewPrefix.length) || 'index.html';
+      if (!subPath || subPath === '/') {
+        subPath = 'index.html';
+      }
+
+      const fileInfo = ProjectBuildService.getPreviewFile(req.user!.userId, req.params.projectId, subPath);
+
+      if (!fileInfo.exists) {
+        if (subPath === 'index.html') {
+          res.status(200).send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Preview Unavailable</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: #94a3b8; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }
+    .box { background: #111827; border: 1px solid #1f2937; padding: 2.5rem; border-radius: 12px; max-width: 460px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    h3 { color: #f3f4f6; margin-top: 0; font-size: 1.25rem; }
+    p { font-size: 0.95rem; line-height: 1.6; margin-bottom: 1.5rem; }
+    .badge { display: inline-block; background: #374151; color: #e5e7eb; font-size: 0.8rem; font-weight: 600; padding: 4px 10px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="badge">Live Sandbox</div>
+    <h3>Preview unavailable</h3>
+    <p>This project has not produced a valid build yet. Click <strong>Run Build</strong> in the project workspace to compile the code and generate the live preview.</p>
+  </div>
+</body>
+</html>`);
+          return;
+        }
+        res.status(404).send('Preview asset not found.');
+        return;
+      }
+
+      res.setHeader('Content-Type', fileInfo.mimeType);
+      fs.createReadStream(fileInfo.filePath).pipe(res);
+    } catch (err: any) {
+      res.status(500).send(`Preview error: ${err?.message || 'Server error'}`);
+    }
+  });
+
+  // ==========================================
+  // PHASE 10: Real Deployment & Cloud Workspace API Routes
+  // ==========================================
+
+  // 1. Providers status check
+  app.get('/api/deployments/providers', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const statuses = DeploymentProviderRegistry.getProviderStatuses();
+      res.status(200).json(statuses);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to retrieve deployment providers' });
+    }
+  });
+
+  // 2. List project deployments
+  app.get('/api/projects/:projectId/deployments', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const deployments = DeploymentService.listDeployments(req.user!.userId, req.params.projectId);
+      res.status(200).json({ deployments });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to list deployments' });
+    }
+  });
+
+  // 3. Create real deployment (Production / Preview)
+  app.post('/api/projects/:projectId/deployments', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { snapshotId, environment, providerName } = req.body || {};
+      const deployment = await DeploymentService.createDeployment({
+        userId: req.user!.userId,
+        projectId: req.params.projectId,
+        snapshotId,
+        environment,
+        providerName
+      });
+      res.status(201).json({ deployment });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Deployment creation failed' });
+    }
+  });
+
+  // 4. Get deployment detail
+  app.get('/api/projects/:projectId/deployments/:deploymentId', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const deployment = DeploymentService.getDeployment(req.user!.userId, req.params.projectId, req.params.deploymentId);
+      res.status(200).json({ deployment });
+    } catch (err: any) {
+      res.status(404).json({ error: err?.message || 'Deployment not found' });
+    }
+  });
+
+  // 5. Get deployment logs
+  app.get('/api/projects/:projectId/deployments/:deploymentId/logs', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const logs = DeploymentService.getDeploymentLogs(req.user!.userId, req.params.projectId, req.params.deploymentId);
+      res.status(200).json({ logs });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to fetch deployment logs' });
+    }
+  });
+
+  // 6. Run live health check on deployment
+  app.post('/api/projects/:projectId/deployments/:deploymentId/health', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await DeploymentService.runHealthCheck(req.user!.userId, req.params.projectId, req.params.deploymentId);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Health check execution failed' });
+    }
+  });
+
+  // 7. Cancel in-progress deployment
+  app.post('/api/projects/:projectId/deployments/:deploymentId/cancel', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await DeploymentService.cancelDeployment(req.user!.userId, req.params.projectId, req.params.deploymentId);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to cancel deployment' });
+    }
+  });
+
+  // 8. Stop running deployment
+  app.post('/api/projects/:projectId/deployments/:deploymentId/stop', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const result = DeploymentService.stopDeployment(req.user!.userId, req.params.projectId, req.params.deploymentId);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to stop deployment' });
+    }
+  });
+
+  // 9. Rollback to previous deployment snapshot
+  app.post('/api/projects/:projectId/deployments/:deploymentId/rollback', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const deployment = await DeploymentService.rollbackToDeployment(req.user!.userId, req.params.projectId, req.params.deploymentId);
+      res.status(200).json({ deployment, message: 'Rollback initiated and deployment queued.' });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Rollback failed' });
+    }
+  });
+
+  // 10. Scoped Environment Variables
+  app.get('/api/projects/:projectId/scoped-env', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const env = (req.query.env as any) || 'production';
+      const envVars = DeploymentService.listScopedEnvVars(req.user!.userId, req.params.projectId, env);
+      res.status(200).json({ envVars });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to list scoped env vars' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/scoped-env', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const { environment = 'production', key, value } = req.body || {};
+      if (!key || typeof value !== 'string') {
+        res.status(400).json({ error: 'key and string value are required' });
+        return;
+      }
+      DeploymentService.setScopedEnvVar(req.user!.userId, req.params.projectId, environment, key, value);
+      res.status(200).json({ success: true, message: `Variable "${key}" configured for ${environment}.` });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to save environment variable' });
+    }
+  });
+
+  app.delete('/api/projects/:projectId/scoped-env/:key', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const env = (req.query.env as any) || 'production';
+      DeploymentService.deleteScopedEnvVar(req.user!.userId, req.params.projectId, env, req.params.key);
+      res.status(200).json({ success: true, message: 'Variable removed.' });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to delete variable' });
+    }
+  });
+
+  // 11. Preview Sandbox Status & Action
+  app.get('/api/projects/:projectId/preview-status', requireAuth, (req: Request, res: Response): void => {
+    try {
+      const status = DeploymentService.getPreviewStatus(req.user!.userId, req.params.projectId);
+      res.status(200).json(status);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to get preview status' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/preview-action', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { action } = req.body || {};
+      if (action === 'stop') {
+        const result = DeploymentService.stopPreview(req.user!.userId, req.params.projectId);
+        res.status(200).json(result);
+        return;
+      }
+
+      if (action === 'start' || action === 'refresh') {
+        await ProjectBuildService.runBuild(req.user!.userId, req.params.projectId);
+        const status = DeploymentService.getPreviewStatus(req.user!.userId, req.params.projectId);
+        res.status(200).json({ ...status, message: 'Preview build updated successfully.' });
+        return;
+      }
+
+      res.status(400).json({ error: 'Invalid preview action. Expected "start", "stop", or "refresh".' });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Preview action failed' });
+    }
+  });
+
+  // 12. AI Deployment Diagnostics
+  app.get('/api/projects/:projectId/ai/deployment-readiness', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const readiness = await ProjectAiService.analyzeDeploymentReadiness(req.user!.userId, req.params.projectId);
+      res.status(200).json(readiness);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to analyze deployment readiness' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/ai/deployment-error', requireAuth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { deploymentId, errorMessage, errorLogs } = req.body || {};
+      if (!deploymentId) {
+        res.status(400).json({ error: 'deploymentId is required' });
+        return;
+      }
+      const diagnosis = await ProjectAiService.analyzeDeploymentError(
+        req.user!.userId,
+        req.params.projectId,
+        deploymentId,
+        errorMessage,
+        errorLogs
+      );
+      res.status(200).json(diagnosis);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'AI diagnosis failed' });
     }
   });
 

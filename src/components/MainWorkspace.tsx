@@ -4,14 +4,24 @@ import { EmptyState } from './EmptyState';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 import { FilesView } from './FilesView';
+import { ProjectsView } from './projects/ProjectsView';
 
 export const MainWorkspace: React.FC = () => {
-  const { currentView, messages } = useWorkspace();
+  const { currentView, activeMode, messages } = useWorkspace();
 
   if (currentView === 'files') {
     return (
       <main className="flex-1 flex flex-col min-h-0 bg-[#060204] relative overflow-hidden darkano-ambient-bg">
         <FilesView />
+      </main>
+    );
+  }
+
+  // Phase 9: Real AI Coding Workspace + Project Builder
+  if (activeMode === 'code') {
+    return (
+      <main className="flex-1 flex flex-col min-h-0 bg-[#060204] relative overflow-hidden darkano-ambient-bg">
+        <ProjectsView />
       </main>
     );
   }

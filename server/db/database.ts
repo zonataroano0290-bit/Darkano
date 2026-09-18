@@ -299,6 +299,159 @@ db.exec(`
     createdAt TEXT NOT NULL
   );
 
+  -- ==========================================
+  -- PHASE 9: Real AI Coding Workspace + Project Builder
+  -- ==========================================
+
+  -- 21. Projects Table
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    framework TEXT NOT NULL DEFAULT 'react-vite',
+    language TEXT NOT NULL DEFAULT 'typescript',
+    status TEXT NOT NULL DEFAULT 'active', -- 'active', 'building', 'archived'
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+
+  -- 22. Project Files Table
+  CREATE TABLE IF NOT EXISTS project_files (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    content TEXT NOT NULL,
+    fileType TEXT NOT NULL DEFAULT 'file', -- 'file', 'directory'
+    size INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    UNIQUE(projectId, path)
+  );
+
+  -- 23. Project Snapshots Table
+  CREATE TABLE IF NOT EXISTS project_snapshots (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    createdBy TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    description TEXT NOT NULL,
+    filesJson TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+
+  -- 24. Project Builds Table
+  CREATE TABLE IF NOT EXISTS project_builds (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL, -- 'queued', 'running', 'success', 'failed', 'cancelled'
+    command TEXT NOT NULL,
+    output TEXT NOT NULL DEFAULT '',
+    errors TEXT,
+    startedAt TEXT NOT NULL,
+    completedAt TEXT,
+    durationMs INTEGER NOT NULL DEFAULT 0
+  );
+
+  -- 25. Project Tasks Table (AI Coding Tasks)
+  CREATE TABLE IF NOT EXISTS project_tasks (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'running', 'completed', 'failed'
+    planJson TEXT,
+    result TEXT,
+    creditsUsed INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL,
+    completedAt TEXT
+  );
+
+  -- 26. Project Changes / Patches (Safe Review System)
+  CREATE TABLE IF NOT EXISTS project_changes (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    originalContent TEXT,
+    proposedContent TEXT NOT NULL,
+    diffSummary TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'applied', 'rejected'
+    createdAt TEXT NOT NULL,
+    appliedAt TEXT
+  );
+
+  -- 27. Project Environment Variables (Masked Secret Storage)
+  CREATE TABLE IF NOT EXISTS project_env_vars (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    valueEncrypted TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    UNIQUE(projectId, key)
+  );
+
+  -- ==========================================
+  -- PHASE 10: Real Deployment & Cloud Workspace Tables
+  -- ==========================================
+
+  -- 28. Real Deployments Table
+  CREATE TABLE IF NOT EXISTS deployments (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    snapshotId TEXT REFERENCES project_snapshots(id) ON DELETE SET NULL,
+    environment TEXT NOT NULL DEFAULT 'production', -- 'production', 'preview', 'development'
+    provider TEXT NOT NULL, -- 'vercel', 'netlify', 'cloudflare', 'none'
+    status TEXT NOT NULL, -- 'queued', 'building', 'deploying', 'running', 'failed', 'cancelled', 'stopped'
+    deploymentUrl TEXT,
+    buildId TEXT REFERENCES project_builds(id) ON DELETE SET NULL,
+    logsReference TEXT,
+    errorMessage TEXT,
+    healthStatus TEXT NOT NULL DEFAULT 'unknown', -- 'healthy', 'unhealthy', 'unknown'
+    creditsDeducted INTEGER NOT NULL DEFAULT 0,
+    durationMs INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL,
+    startedAt TEXT,
+    completedAt TEXT,
+    stoppedAt TEXT
+  );
+
+  -- 29. Real Deployment Logs Table
+  CREATE TABLE IF NOT EXISTS deployment_logs (
+    id TEXT PRIMARY KEY,
+    deploymentId TEXT NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+    level TEXT NOT NULL DEFAULT 'info', -- 'info', 'warn', 'error', 'system'
+    message TEXT NOT NULL,
+    timestamp TEXT NOT NULL
+  );
+
+  -- 30. Scoped Deployment Environments Variables
+  CREATE TABLE IF NOT EXISTS deployment_environments (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    environment TEXT NOT NULL, -- 'production', 'preview', 'development'
+    key TEXT NOT NULL,
+    valueEncrypted TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    UNIQUE(projectId, environment, key)
+  );
+
+  -- 31. Deployment Custom Domains
+  CREATE TABLE IF NOT EXISTS deployment_domains (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    domain TEXT NOT NULL,
+    environment TEXT NOT NULL DEFAULT 'production',
+    verified INTEGER NOT NULL DEFAULT 0,
+    sslStatus TEXT NOT NULL DEFAULT 'unknown', -- 'active', 'pending', 'unknown', 'failed'
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    UNIQUE(projectId, domain)
+  );
+
   -- Performance Indexes
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
@@ -331,6 +484,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_media_user ON media(userId, createdAt DESC);
   CREATE INDEX IF NOT EXISTS idx_media_conv ON media(conversationId);
   CREATE INDEX IF NOT EXISTS idx_media_type ON media(type);
+  CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(userId, updatedAt DESC);
+  CREATE INDEX IF NOT EXISTS idx_project_files_proj ON project_files(projectId, path);
+  CREATE INDEX IF NOT EXISTS idx_project_snapshots_proj ON project_snapshots(projectId, createdAt DESC);
+  CREATE INDEX IF NOT EXISTS idx_project_builds_proj ON project_builds(projectId, startedAt DESC);
+  CREATE INDEX IF NOT EXISTS idx_project_tasks_proj ON project_tasks(projectId, createdAt DESC);
+  CREATE INDEX IF NOT EXISTS idx_project_changes_proj ON project_changes(projectId, status);
+  CREATE INDEX IF NOT EXISTS idx_deployments_proj ON deployments(projectId, createdAt DESC);
+  CREATE INDEX IF NOT EXISTS idx_deployments_user ON deployments(userId, createdAt DESC);
+  CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status);
+  CREATE INDEX IF NOT EXISTS idx_deployment_logs_dep ON deployment_logs(deploymentId, timestamp ASC);
+  CREATE INDEX IF NOT EXISTS idx_deployment_env_proj ON deployment_environments(projectId, environment);
+  CREATE INDEX IF NOT EXISTS idx_deployment_domains_proj ON deployment_domains(projectId);
 `);
 
 // Run column migrations for `users` table safely
